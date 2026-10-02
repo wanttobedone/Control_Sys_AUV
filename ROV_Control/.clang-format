@@ -1,0 +1,14 @@
+# 参考 Glider_sim 的 ug_control：两空格缩进、大括号换行、函数按步骤展开。
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++17
+IndentWidth: 2
+AccessModifierOffset: -2
+NamespaceIndentation: None
+BreakBeforeBraces: Allman
+ColumnLimit: 100
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+DerivePointerAlignment: false
+PointerAlignment: Right

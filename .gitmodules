@@ -1,0 +1,3 @@
+[submodule "USTROV"]
+	path = USTROV
+	url = https://github.com/Airbian/USTROV.git

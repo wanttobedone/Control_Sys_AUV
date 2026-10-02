@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>rov_control_core</name>
+  <version>0.1.0</version>
+  <description>ROS-independent C++ path, trajectory and control mathematics.</description>
+  <!-- 本地学习包：维护者与许可证目前为占位，正式分发前需填写真实信息。 -->
+  <maintainer email="maintainer@example.invalid">ROV_Control maintainer</maintainer>
+  <license>TODO</license>
+  <!-- ament 负责 ROS 2 包构建与导出；算法只依赖 Eigen，测试依赖 GoogleTest。 -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>eigen</depend>
+  <test_depend>gtest</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>
