@@ -1,182 +1,248 @@
 # ROV_Control
 
-自研 ROV 规划与控制学习工程。算法、ROS 节点和测试均为 C++；自有启动文件统一采用 XML 内容、以 .launch 结尾。
+自研 ROV 规划与控制学习工程。算法、节点、测试使用 C++；自有启动文件统一为 XML 内容、`.launch` 后缀。
 
-## 1. 当前完成到哪里（2026-09-30）
+## 1. 系统目标与当前进度（2026-10-02）
 
-| 部分 | 状态 |
+| 部分 | 当前状态 |
 |---|---|
-| Gazebo/Hippo 模型、真值反馈 | 用户此前已运行；本日核对 WSL 依赖和启动参数有效，本日未启动仿真 |
-| A 批：边界、直线路径、进度投影、五次时间轨迹、未来参考 | 已实现；09-29 独立 CMake Debug 和 ROS 2 colcon RelWithDebInfo 均通过 21 个 GTest |
-| B 批：ROS 状态转换、轨迹预览、XML 启动 | 函数级设计见 [总体设计 §9](docs/PATH_TRACKING_DESIGN.md#9-b-批hippo-状态接入与轨迹预览的具体设计)，待本次讲解后确认实现 |
-| C/D 批：纵向 PD＋姿态保持的 Hippo 软件闭环 | B 批之后，具体执行适配和停止路径须先讲解确认 |
+| A：边界、直线路径、进度投影、五次时间轨迹、未来参考 | 已实现，21 个 C++ 单元测试通过 |
+| B：状态适配、轨迹预览、XML 启动 | 已实现；新增 14 个单元测试通过，已接 Hippo 实际运行 |
+| C/D：纵向 PD + 姿态保持软件闭环 | 下一批，执行接口和停止路径须先讲解确认 |
 | MPC、Pi/PX4、真实视觉 | 后续阶段 |
 
-**目前只有数学库和测试程序；还不能启动本工程的 ROS 预览或跟踪节点。** 预览是闭环前的接线检查，完整 SIL 要让控制输出影响 Gazebo 并重新收到状态。当前路线不经过 PX4 固件。
+**本批完成从 Gazebo 状态到参考显示的通路。机器人尚未跟踪参考，预览节点不输出控制命令。** 当前仿真使用 USTROV 的真值反馈，不经过 PX4，也不代表视觉/惯导融合已验收。
 
-文档只保留三份入口：
+文档分工：
 
-- 本 README：当前状态、构建、使用、数据流和验证。
-- [PATH_TRACKING_DESIGN.md](docs/PATH_TRACKING_DESIGN.md)：模块/函数设计、Hippo 接线、分批验收。
-- [MPC_LEARNING_ROADMAP.md](docs/MPC_LEARNING_ROADMAP.md)：开源方案、MPC 数学和后续学习路线。
+- 本 README：当前实现、数据流、构建启动、验证与排障。
+- [总体设计](docs/PATH_TRACKING_DESIGN.md)：文件/函数接口与后续分批设计。
+- [MPC 学习路线](docs/MPC_LEARNING_ROADMAP.md)：算法推导与开源工具选型。
 
-原阶段汇报的使用和教学内容已合并到本页与总体设计；原开发计划的有效环境/接口信息已并入总体设计。项目根目录四份规则/研究记录仍保留。
-
-## 2. 源码与环境位置
-
-| 内容 | 路径/约定 |
-|---|---|
-| 自研源码唯一来源 | Windows：C:/DeskFiles/MPC-Mamba/ROV_Control |
-| WSL 访问同一份自研源码 | /mnt/c/DeskFiles/MPC-Mamba/ROV_Control |
-| WSL 外部平台依赖 | ~/rov_sim/USTROV/ustrov_ws |
-| 仿真环境 | Ubuntu-24.04、ROS 2 Jazzy、Gazebo Harmonic |
-| USTROV 固定版本 | b1208e50becb9f74d4d0dcd8637ac11e73d3672a；09-30 两处工作树均干净 |
-| 代码风格 | .h/.cpp、Allman 大括号、两空格、小驼峰函数、成员尾下划线、详细中文注释 |
-
-ROV_Control 尚未初始化独立 Git 仓库；建议后续独立管理，USTROV 为同级固定版本依赖。package.xml 的维护者邮箱和许可证仍是明确占位。build/install/log 是本机生成物，已被 .gitignore 忽略。
-
-## 3. 现在即可运行的 A 批示例
-
-从 PowerShell 进入已有 WSL：
-
-~~~powershell
-wsl -d Ubuntu-24.04
-~~~
-
-在 Ubuntu 终端运行：
-
-~~~bash
-cd /mnt/c/DeskFiles/MPC-Mamba/ROV_Control
-./build/colcon/rov_control_core/test_path_trajectory \
-  --gtest_filter=Trajectory.ExamplePrintsIndependentlyCheckedQuarterPoints
-~~~
-
-这是普通 C++ 测试可执行文件，运行它不需要 Gazebo 或 ROS source。构建产物被清理时先按下一节重建。
-
-### 输入与结果
-
-教学输入：起点 (0,0,-0.4) m，终点 (0.2,0,-0.4) m；有效盒 [-1,-1,-1] 到 [1,1,0] m；v_max=0.08 m/s、a_max=0.1 m/s²、T_min=0.1 s；固定单位姿态，未启用 jerk 限制。这些是数学测试参数，不是当前机器人或水池的标定。
-
-输出总时间 T=4.6875 s：
-
-| 时间 s | 沿线位置 m | 沿线速度 m/s | 沿线加速度 m/s² |
-|---:|---:|---:|---:|
-| 0 | 0 | 0 | 0 |
-| 1.171875 | 0.020703125 | 0.045 | 0.0512 |
-| 2.343750 | 0.100000000 | 0.080 | 0 |
-| 3.515625 | 0.179296875 | 0.045 | −0.0512 |
-| 4.687500 | 0.200000000 | 0 | 0 |
-
-这是参考轨迹，尚无机器人跟踪结果。测试使用独立代入公式得到的期望值核对这五个点。
-
-## 4. 构建与测试
-
-### A 批 colcon 构建
-
-~~~bash
-cd /mnt/c/DeskFiles/MPC-Mamba/ROV_Control
-source /opt/ros/jazzy/setup.bash
-
-colcon build --base-paths src \
-  --build-base build/colcon --install-base install \
-  --packages-select rov_control_core \
-  --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
-
-colcon test --base-paths src \
-  --build-base build/colcon --install-base install \
-  --packages-select rov_control_core --event-handlers console_direct+
-
-colcon test-result --test-result-base build/colcon/rov_control_core --verbose
-source install/local_setup.bash
-ros2 pkg prefix rov_control_core
-~~~
-
-A 批不依赖 USTROV。21 个 GTest 分为 6 组；colcon 汇总包含外层 CTest 入口，可能显示 22 项。09-29 实测 0 错误、0 失败。
-
-### 独立 CMake 构建
-
-~~~bash
-cd /mnt/c/DeskFiles/MPC-Mamba/ROV_Control
-cmake -S src/rov_control_core -B build/core-standalone \
-  -DROV_CORE_WITH_AMENT=OFF -DCMAKE_BUILD_TYPE=Debug
-cmake --build build/core-standalone -j2
-ctest --test-dir build/core-standalone --output-on-failure
-~~~
-
-关闭 ament 包装后使用同一份 C++/Eigen 算法。没有另外维护一套无 ROS 算法。库包当前没有 ros2 run 或 ros2 launch 节点入口。
-
-## 5. A 批数据流与代码阅读
+## 2. 架构、源码与 Git
 
 ~~~text
-PlanRequest（端点、有效空间、可选前向启动约束）
-  → LinePathPlanner::plan()
-  → LinePath（起终点、单位方向、长度）
-  → QuinticTrajectory::create(path, limits, attitude)
-       └─ chooseDuration() 计算总时间
-  → sample(t) / sampleHorizon(t, dt, count, buffer)
-  → ReferenceSample（同一时刻的位置、速度、加速度、姿态）
-
-RobotState（实际状态）＋LinePath
-  → projectProgress()
-  → ProgressState（实际沿线进度、速度、侧向残差与深度偏差）
+Control_Sys_AUV/                  Git 主仓库
+├── AGENTS.md                     本地工作约定，当前被忽略
+├── .gitignore
+├── USTROV/                       外部 Git 子模块，提供仿真和状态桥
+└── ROV_Control/
+    ├── src/rov_control_core/     纯 C++/Eigen 数学，不依赖 ROS
+    ├── src/rov_control_ros/      C++ 状态适配、只读轨迹预览
+    ├── src/rov_bringup/          XML .launch、YAML、RViz
+    ├── docs/
+    ├── build/batch_b/            本机构建产物，忽略
+    ├── install-b/                本次安装空间，忽略
+    └── log/                      编译/仿真日志、rosbag，忽略
 ~~~
 
-目前参数与时间由测试程序传入，未订阅 ROS、未输出控制。后续 ROS 层负责输入状态和时间，控制器读取内部参考对象；nav_msgs/Path 只用于显示。
-
-短路径相对 src/rov_control_core：
-
-| 文件 | 阅读重点 |
+| 内容 | 位置 |
 |---|---|
-| include/rov_control_core/types.h | W/B 坐标、单位、状态与参考区别 |
-| include/rov_control_core/result.h | Result<T>、Status、错误码；先 ok()，成功后才 value() |
-| src/planning/workspace_bounds.cpp | 闭区间有效盒；凸集的端点检查 |
-| src/planning/line_path.cpp | 长度/方向、前向约束、保留超调的进度投影 |
-| src/planning/quintic_trajectory.cpp | 时间下界、五次多项式导数、端点保持和未来采样 |
-| test/test_path_trajectory.cpp | 每个用例的场景与独立预期；示例入口在 ExamplePrintsIndependentlyCheckedQuarterPoints |
-| CMakeLists.txt、package.xml | 编译、依赖、测试、安装与导出 |
+| 唯一自研源码 | C:/DeskFiles/MPC-Mamba/Control_Sys_AUV/ROV_Control |
+| WSL 访问同一份源码 | /mnt/c/DeskFiles/MPC-Mamba/Control_Sys_AUV/ROV_Control |
+| 已构建的 WSL 外部依赖 | ~/rov_sim/USTROV/ustrov_ws |
+| 仿真环境 | Ubuntu-24.04、ROS 2 Jazzy、Gazebo Harmonic |
+| USTROV 固定版本 | b1208e50becb9f74d4d0dcd8637ac11e73d3672a |
 
-代码风格参照用户 Glider_sim 的 ug_control：已读 PID 头文件/实现、control_node.cpp 和 mission_node.cpp；未搬入旧控制逻辑。排版约定在 .clang-format；上次按配置手工整理，未安装格式化工具。方法已从 Plan/Create/Sample 改为 plan/create/sample，头文件已从 .hpp 改为 .h，调用与安装头文件已同步。
+本次沿用用户建立的主仓库 + USTROV 子模块组织，没有改写上游。路径移动前的 build/install 可能含旧绝对路径，因此本次使用新 build/batch_b、install-b；旧产物未删除。正式 C++ 测试源码仍进入 Git，忽略的是测试结果和临时验证工具。维护者邮箱和许可证仍是 package.xml 中的明确占位。
 
-## 6. 下一步启动方式（B 批实现后才可运行）
+## 3. 运行流程与数据结构
 
-B 批具体职责、参数、函数和测试见总体设计 §9。自有启动文件都以 .launch 结尾，内容使用 ROS 2 XML；hippo_sim.launch 内部 include 外部 USTROV 的已有启动入口。
+~~~text
+Hippo 物理模型 → ground_truth/odometry → fake_state_estimator
+    → /uuv00/odometry
+    → onOdometry() → StateAdapter::convert()
+    → RobotState（p_W、q_WB、v_W、omega_B、stamp_ns）
+                                 │
+preview.yaml → PreviewConfig     │
+start 服务 ──────────────────────┘
+    → createTrajectory()
+    → LinePathPlanner::plan() → LinePath
+    → QuinticTrajectory::create() → 固定轨迹与 t0
+    → makePathMessage() → planned_path → RViz
 
-**以下命令是待实现接口，当前没有 rov_control_ros 和 rov_bringup 包。**
+/clock → ROS 时间 → onTimer() → sample(now-t0)
+    → ReferenceSample → reference_pose → RViz
+RobotState + LinePath → projectProgress() → 实际进度
+参考 + 实际进度 + 时效 + 阶段 → diagnostics → CLI / rosbag
+~~~
 
-先构建：
+关键约定：
+
+- W=`map`，世界 z 向上；B=`vehicle_name/base_link`。m、s、rad。
+- Odometry 的 pose 在 W、twist 在 B。适配器执行 `v_W=q_WB*v_B`；角速度保留 `omega_B`。
+- ROS 时间决定参考进度；steady clock 检测有效消息接收中断。仿真暂停不能继续按实际时间播放轨迹。
+- `start` 快照当前点和水平机头方向。默认 yaw≈90°，终点约为当前点加 `(0,0.2,0)`。路径不会随之后的实际漂移移动。
+- `Path` 只用于显示；`ReferenceSample` 才同时包含位置、速度、加速度、姿态。后续控制器应读取后者。
+- 起速/倾角执行门控不在本批：漂移中也能生成预览。预览成功不能作为控制可执行性证明。
+
+阶段：
+
+~~~text
+WAIT_STATE → 收到并检查状态 → READY
+READY/FINISHED → start → PREVIEW → 参考时间到 T → FINISHED
+PREVIEW/FINISHED → stop → READY（状态不新鲜则等待）
+非法状态 / 时效超限 / 时间倒退 → FAULT
+FAULT → reset_fault → WAIT_STATE → READY → 用户再次 start
+~~~
+
+FAULT 锁存；恢复消息、恢复仿真或调用 stop 都不能绕过 reset_fault。FINISHED 只表示参考播放结束。stop/故障发布空 Path；RViz 可能仍保留上一根 Pose 箭头，当前有效性以 diagnostics 为准。
+
+## 4. 模块、文件与关键函数
+
+路径相对 src/：
+
+| 文件 | 函数/阅读重点 |
+|---|---|
+| rov_control_core/include/rov_control_core/types.h | 状态、规划请求、限制、参考、进度的坐标/单位 |
+| rov_control_core/include/rov_control_core/result.h | 先 ok()，成功后才 value()；失败含明确错误原因 |
+| rov_control_core/src/planning/line_path.cpp | plan：端点→方向/长度；projectProgress：实际沿线与横向偏差 |
+| rov_control_core/src/planning/quintic_trajectory.cpp | chooseDuration、create、sample、sampleHorizon |
+| rov_control_ros/include/rov_control_ros/state_adapter.h | 适配接口、上一有效时间戳 |
+| rov_control_ros/src/state_adapter.cpp | convert：frame→时间→有限值/四元数→速度旋转→提交历史；reset 清历史 |
+| rov_control_ros/include/rov_control_ros/trajectory_preview_node.h | PreviewConfig、PreviewStatus、节点内部快照与 ROS 对象 |
+| rov_control_ros/src/trajectory_preview_node.cpp | loadConfig、onOdometry、isStateFresh、createTrajectory、makePathMessage、onStart/onStop/onResetFault、onTimer、publishReference、publishDiagnostics、clearRun |
+| rov_control_ros/src/preview_main.cpp | init→单线程 spin→shutdown |
+| rov_control_ros/test/test_state_adapter.cpp | 坐标、坏数据、单调时间、拒绝输入不污染历史 |
+| rov_control_ros/test/test_preview_math.cpp | 实际起点/朝向、端点/时间、越界、显示点数与时间溢出 |
+| rov_bringup/launch/hippo_sim.launch | include 外部 Hippo 启动，只有一套 mixer |
+| rov_bringup/launch/trajectory_preview.launch | 自研节点 + 可选 RViz，已有仿真时单独使用 |
+| rov_bringup/launch/hippo_preview.launch | 组合上述两个入口 |
+| rov_bringup/config/preview.yaml | 参考限制、消息时效、活动盒 |
+| rov_bringup/rviz/trajectory_preview.rviz | map 下显示实际里程计、完整路径、参考姿态 |
+
+源码用中文注释展开步骤；Allman 大括号、两空格、小驼峰和成员尾下划线。节点用单线程 executor，参数只在启动时读取，运行中修改会被明确拒绝。
+
+## 5. 构建与测试
+
+在 PowerShell 进入 WSL：`wsl -d Ubuntu-24.04`。以下均在 Ubuntu 终端执行：
 
 ~~~bash
-cd /mnt/c/DeskFiles/MPC-Mamba/ROV_Control
+cd /mnt/c/DeskFiles/MPC-Mamba/Control_Sys_AUV/ROV_Control
 source /opt/ros/jazzy/setup.bash
 source ~/rov_sim/USTROV/ustrov_ws/install/local_setup.bash
 
-colcon build --base-paths src \
-  --build-base build/colcon --install-base install \
-  --packages-up-to rov_bringup \
+MAKEFLAGS="-j2" colcon build --base-paths src \
+  --build-base build/batch_b --install-base install-b \
+  --executor sequential \
   --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
-source install/local_setup.bash
+
+colcon test --base-paths src \
+  --build-base build/batch_b --install-base install-b \
+  --event-handlers console_direct+
+colcon test-result --test-result-base build/batch_b --verbose
+source install-b/local_setup.bash
 ~~~
 
-终端 1 一次启动仿真与预览：
+本次是 35 个 GTest：A 的 21 + 状态适配 7 + 预览数学 7。colcon 还统计 3 个 CTest 入口，因此汇总显示 **38 tests，0 errors，0 failures**。
+
+单独查看数学例子，不需要启动 Gazebo：
+
+~~~bash
+./build/batch_b/rov_control_core/test_path_trajectory \
+  --gtest_filter=Trajectory.ExamplePrintsIndependentlyCheckedQuarterPoints
+~~~
+
+L=0.2 m、vmax=0.08 m/s、amax=0.1 m/s²，得 T=4.6875 s：
+
+| t [s] | s [m] | v [m/s] | a [m/s²] |
+|---:|---:|---:|---:|
+| 0 | 0 | 0 | 0 |
+| 1.171875 | 0.020703125 | 0.045 | 0.0512 |
+| 2.343750 | 0.1 | 0.08 | 0 |
+| 3.515625 | 0.179296875 | 0.045 | −0.0512 |
+| 4.687500 | 0.2 | 0 | 0 |
+
+仍可独立编译数学核心：`cmake -S src/rov_control_core -B build/core-new -DROV_CORE_WITH_AMENT=OFF`，然后 `cmake --build build/core-new -j2`、`ctest --test-dir build/core-new --output-on-failure`。
+
+## 6. 启动与使用
+
+### 每个新终端先加载三层环境
+
+~~~bash
+source /opt/ros/jazzy/setup.bash
+source ~/rov_sim/USTROV/ustrov_ws/install/local_setup.bash
+source /mnt/c/DeskFiles/MPC-Mamba/Control_Sys_AUV/ROV_Control/install-b/local_setup.bash
+~~~
+
+对应 ROS 1 的系统 ROS → 依赖工作区 → 自己的工作区。原 .bashrc 中若仍 source 旧 ROV_Control 路径，应替换为上面的新路径；使用 `[ -f 路径 ] && source 路径` 可避免尚未构建时每次开终端报错。本次没有自动改写 .bashrc。
+
+### 终端 1：启动一套仿真
 
 ~~~bash
 ros2 launch rov_bringup hippo_preview.launch \
   vehicle_name:=uuv00 start_gui:=true start_rviz:=true
 ~~~
 
-终端 2 同样加载 ROS → USTROV → ROV_Control，再显式生成参考：
+若 Hippo 已经运行，只用：
+
+~~~bash
+ros2 launch rov_bringup trajectory_preview.launch vehicle_name:=uuv00
+~~~
+
+等待终端出现 `READY：状态有效，可调用 start 预览`。不需要 roscore。自有 XML 使用 exec/namespace、$(find-pkg-share ...)、$(var ...)；外部 Python launch 由 include 复用。
+
+### 终端 2：触发和观察
 
 ~~~bash
 ros2 service call /uuv00/trajectory_preview/start std_srvs/srv/Trigger "{}"
 ros2 topic echo /uuv00/trajectory_preview/diagnostics --once
 ~~~
 
-预览节点不会驱动机器人。若已有一套 Hippo 在运行，只启动 trajectory_preview.launch，避免重复 Gazebo 和 mixer。停止预览用同名节点下的 stop 服务；故障时先排除原因，再调用 reset_fault 和 start。
+RViz 中绿色是整条参考路径，参考箭头沿线移动；Actual Odometry 显示真实仿真状态。节点不会驱动机器人，所以此时实际 Hippo 不会主动追随参考。
 
-记录方式：B 批采用现成 rosbag2 保存 odometry、planned_path、reference_pose、diagnostics 和 /clock；C 批再增加逐控制周期的 C++ 日志。rosbag 属于数据文件，写入 log/ 并使用不同运行目录。
+~~~bash
+# 停止预览
+ros2 service call /uuv00/trajectory_preview/stop std_srvs/srv/Trigger "{}"
 
-## 7. 验证边界
+# FAULT 时先恢复状态来源，再复位；等待 READY 后重新 start
+ros2 service call /uuv00/trajectory_preview/reset_fault std_srvs/srv/Trigger "{}"
+~~~
 
-A 批覆盖零路径、越界、前向/倾斜/起速约束、NaN/Inf、数值溢出、投影超调、解析速度/加速度峰值、jerk 时长、三维方向、差分导数、端点保持以及未来采样失败不部分写入。
+参数修改：编辑 preview.yaml 后重建 rov_bringup 并重启；或传 `config_file:=/绝对路径/preview.yaml` 加载自己的文件。命名空间更换时设 `vehicle_name:=uuv_b`，服务和话题前缀随之改变，body_frame 由 launch 同步设置。
 
-这些测试不能证明 ROS 状态转换、动力学可行性或真机性能。09-30 只读确认本机 ustrov_sim、ustrov_control、rov_control_core、rviz2 包可被发现，上游 --show-args 成功；当前没有运行中的 Hippo 进程，也没有本工程 SIL 闭环结果。
+### 终端 3：记录数据（可选）
+
+~~~bash
+cd /mnt/c/DeskFiles/MPC-Mamba/Control_Sys_AUV/ROV_Control
+mkdir -p log
+ros2 bag record -o "log/preview_$(date +%Y%m%d_%H%M%S)" \
+  /clock /uuv00/odometry \
+  /uuv00/trajectory_preview/planned_path \
+  /uuv00/trajectory_preview/reference_pose \
+  /uuv00/trajectory_preview/diagnostics
+~~~
+
+记录终端 Ctrl+C 正常结束，再 `ros2 bag info log/对应目录` 查看。完整仿真退出用启动终端 Ctrl+C；stop 服务只停止参考。
+
+## 7. 本次验证结果与边界
+
+- 三个包在 WSL Jazzy 编译通过；35 个 C++ 单元测试全部通过。三个 XML 入口被实际解析并运行。
+- uuv00 下实际启动 Gazebo GUI、RViz、状态桥和唯一 mixer；RViz OpenGL 初始化成功，订阅话题和 Path 的 transient-local QoS 已核对。未把 GUI 进程启动等同于人工逐项检查画面。
+- 实际参考起点约 (1.3,1.0,-0.107835) m，终点约 (1.3,1.2,-0.107835) m；101 个显示点，T=4.6875 s。实际 z 与 spawn 的 -0.5 不同，是模型被动上浮后的反馈。
+- 约 0.6 s 暂停：参考时间/位置冻结；超过 2 s 无有效消息：FAULT；恢复仿真后仍锁存故障，reset_fault 后才能再次 start。
+- 改名 uuv_b 后同样通过参考、暂停、故障/复位、停止清空 Path 验证；注入错误 frame 触发 FAULT。实际 ROS 图确认预览节点仅发布显示/诊断及 ROS 基础话题，无执行器发布端点；RViz 的三条业务订阅已随命名空间改变。
+- rosbag 已保存并读取元信息：log/preview_b_renamed，4831 条消息，其中 Odometry 311、Path 8、参考 Pose 411、诊断 17、clock 4084。日志为预览验收数据，其中含专门注入的错误消息，不能拿来训练或评价控制性能。临时 C++ 验收客户端位于被忽略的 ../tmp/live_probe，结果在 log/batch_b_renamed_probe.txt。
+- 实际 Gazebo 时间重置触发了时间倒退 FAULT；但同次上游仿真报告部分 link/joint 不存在、Hippo 状态流未恢复。**这条“重置世界后只复位节点便继续”的路径没有通过；当前应退出整套 launch 再启动。** 普通暂停/恢复与 reset_fault 路径可正常使用。
+- 改名实例退出时，上游 bridge 曾以 -11 退出，vehicle_spawner 删除模型超时后退出；本次自研预览节点正常退出，测试进程均已结束。这是上游关闭路径的待查问题，本批未修改 USTROV 或宣称其退出流程完全通过。
+- 本批不证明运动学参考满足推力能力、闭环稳定性、视觉定位或真机安全。世界活动盒只约束参考中心点；pool.xacro 没有池壁碰撞体。
+- 本次验收使用独立 ROS_DOMAIN_ID=84、GZ_PARTITION=rov_preview_batch_b；日常运行无需设置它们。如自行设置，所有终端必须一致。
+
+下一批先讲清 **沿线 PD 计算、上游姿态计算库、归一化命令单位、限幅/启动/停止/超时、真实控制日志**，再进入 C/D 的闭环实现。
+
+## 8. WSLg 窗口空白 / WARN:COPY MODE 排查
+
+2026-10-02 用户报告：Gazebo/RViz 只出现在 Windows 任务栏，预览空白，标题含 WARN:COPY MODE；ROS 日志已 READY，RViz 已完成 OpenGL 初始化。现场检查确认 Linux 端窗口已创建，但 /mnt/wslg/weston.log 中有 rdp_allocate_shared_memory 的 Input/output error，use_gfxredir=0；Windows RDPClient 日志也有 0x80070490 图形解码错误。
+
+COPY MODE 表示 WSLg 退回通过 RDP 复制像素的显示方式；它本身不证明 OpenGL 或显卡驱动失效。[微软 WSLg 维护者说明](https://github.com/microsoft/wslg/discussions/312)。本机系统发行版的 /mnt/shared_memory 已存在并挂载为 virtiofs，错误出现在共享内存分配阶段。
+
+恢复步骤（会结束全部 WSL 任务，先保存 Linux 中的工作）：
+
+1. 启动仿真的终端 Ctrl+C，等待退出。
+2. 在 Windows PowerShell 执行 `wsl --shutdown`，然后 `wsl -d Ubuntu-24.04`。
+3. 重新执行 §6 的三条 source 和 hippo_preview.launch。
+4. 核对两个窗口确实可见、可交互；仅进程存活或 READY 不算 GUI 验收通过。
+
+本次经用户明确批准已执行重启；新 Weston 日志 use_gfxredir=1，未再出现此前的共享内存分配失败，新会话观察期内未见对应解码错误。GUI 是否实际可见仍需结合用户屏幕反馈确认。重启前日志保存在 log/wslg_before_restart.log，新仿真日志在 log/gui_recovery/。
+
+启动日志里的 `Stereo is NOT SUPPORTED` 是立体显示能力提示；当前预览不发布推力/力矩，mixer 的输入超时置零是预期行为。它们不能解释本次 Windows 窗口传输故障。

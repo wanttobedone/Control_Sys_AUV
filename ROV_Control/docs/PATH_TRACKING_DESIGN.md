@@ -1,6 +1,6 @@
 # 路径规划与轨迹跟踪：从直线基线到 MPC
 
-设计日期：2026-09-28；设计更新：2026-09-30。**A 批经用户确认后已实现并验证；B–G 批仍为待确认设计。**已完成部分见 [使用说明](../README.md)。本文件后续类、节点和话题仍是规划，不能据此认为已存在。算法、节点、测试均为 C++17；XML/YAML/CMake 为声明文件。
+设计日期：2026-09-28；状态更新：2026-10-02。**A/B 批经用户确认后已实现并验证；C–G 批仍为待确认设计。**已完成部分见 [使用说明](../README.md)。本文件 C–G 的类、节点和话题仍是规划，不能据此认为已存在。算法、节点、测试均为 C++17；XML/YAML/CMake 为声明文件。
 
 命名与排版于 2026-09-29 按用户 Glider_sim 工程同步：自研头文件用 `.h`、函数用小驼峰、源码写中文解释。下文未实现接口也使用这一约定，上游既有接口保留原名。
 
@@ -8,7 +8,7 @@
 
 用户决定：视觉闭环保留到后续，优先直接在真实相机、最终防水窗和水环境中验证，不要求先实现视觉仿真。室内浅池、下视 AprilTag、相机＋镜头＋防水预算 2500 元以内的需求保留。视觉接入时再做采集、标定、定位、融合、失效处理；控制器通过统一状态接口接收结果。
 
-当前先在 Gazebo 真值反馈下建立可解释的规划与跟踪链。它验证算法、接口、时序和动力学响应，不代替真机标定，也不是 Pixhawk HIL。现有仿真只完成模型/状态通路验收，尚无本工程轨迹跟踪结果。
+当前先在 Gazebo 真值反馈下建立可解释的规划与跟踪链。它验证算法、接口、时序和动力学响应，不代替真机标定，也不是 Pixhawk HIL。现已完成模型/状态通路与自研参考预览，尚无本工程轨迹跟踪结果。
 
 ### 三个概念
 
@@ -149,7 +149,7 @@ effort_requested=k_p·e_s+k_d·e_v。
 ```text
 ROV_Control/
   docs/                              本设计 + MPC 学习路线
-  dependencies.repos                 后续固定 USTROV 提交
+  # USTROV 版本由父级主仓库的 Git 子模块固定，不另建 dependencies.repos
   src/
     rov_control_core/
       CMakeLists.txt, package.xml
@@ -175,7 +175,7 @@ ROV_Control/
         run_logger.h
         tracking_node.h
       src/                           对上述 .h 各配同名 .cpp
-        main.cpp
+        preview_main.cpp              B：已实现；跟踪入口后续另行设计
       test/test_state_adapter.cpp
       test/test_preview_math.cpp
     rov_bringup/
@@ -258,9 +258,9 @@ preview 模式不创建执行器发布者。sim_control 模式默认 IDLE，显�
 | launch/trajectory_preview.launch | B：只启动 trajectory_preview_node 与可选 RViz，订阅已有仿真状态；不启动 Gazebo/mixer |
 | launch/hippo_preview.launch | B：组合以上两个 .launch，供首次一键启动；已有 Hippo 时只用前一行的预览入口 |
 | launch/hippo_line_tracking.launch | 连接已有仿真，启动一个 own tracking_node；复用计算库，不额外启动姿态节点/mixer；use_sim_time=true，初始 IDLE |
-| dependencies.repos | 固定 USTROV 版本；自身不嵌入复制一套修改后的上游源码 |
+| 父级 .gitmodules + USTROV gitlink | 固定 USTROV 版本；采用用户已建立的 Git 子模块，不另建 dependencies.repos |
 
-预览与闭环入口不能同时控制同一 vehicle；后续可加启动诊断确认控制命令话题来源唯一。构建依赖：ROS 2 + USTROV 安装环境 → ROV_Control overlay；自己的实现只维护一个权威源码目录，WSL 构建从该来源产生，不能同时维护 Windows/WSL 两份独立编辑版本。
+预览没有控制输出；后续闭环必须确认控制命令来源唯一，不能重复启动跟踪节点或 mixer。构建依赖：ROS 2 + USTROV 安装环境 → ROV_Control overlay；自己的实现只维护一个权威源码目录，WSL 构建从该来源产生，不能同时维护 Windows/WSL 两份独立编辑版本。
 
 ## 7. 后续扩展与真机迁移
 
@@ -283,19 +283,19 @@ preview 模式不创建执行器发布者。sim_control 模式默认 IDLE，显�
 | 批次 | 先解释/再实现 | 验收 |
 |---|---|---|
 | A（已完成） | 数据类型、边界、直线路径、五次时间律 + C++ 核心测试 | 2026-09-29 独立 CMake 与 ament/colcon 构建测试通过，21 个 GTest 全通过；教学讲解见 ../README.md；尚不据此判断用户已经掌握 |
-| B | ROS 状态适配与轨迹预览，只连读状态 | yaw=90° 速度转换正确；可看路径与参考，真实模型不受本节点驱动 |
+| B（已完成） | ROS 状态适配与轨迹预览，只连读状态 | 2026-10-02 新增 14 个 C++ 测试通过；Hippo 默认/改名实例、参考、暂停/故障、复位、rosbag 验证完成；世界时间重置后的上游状态恢复限制见 README §7 |
 | C | 小输入方向核验、姿态库封装、PD、限幅、日志与运行状态机 | 唯一命令源、符号正确、沿线响应可解释；暂停/过期/越界停止有效；记录完整 |
 | D | 受限短直线 PD 跟踪 | 报告沿线误差、横向/深度漂移、饱和占比、周期耗时与退出原因，不把投影误差冒充全空间误差 |
 | E | 模型辨识/核验 → MPC 数学与 QP/OSQP → 数值再 Gazebo | 同参考/初始条件/限幅与 PD 比较；记录求解失败、超期、预测误差 |
 | F | 可实现转弯、侧向/深度控制、多航点 | 新受控自由度逐步通过；未满足时不追加复杂规划器掩盖控制缺口 |
 | G | Pi/实际布局适配、状态估计、后续真实视觉闭环 | 按设备与观测条件分级验证，保留桥原有保护；不是改 namespace 后直接下水 |
 
-2026-09-29 用户确认并完成 A 批；09-30 要求继续接 Hippo 做软件在环、自有启动统一 .launch 并清理重复文档。本次将 B 批细化为下文 §9，讲解后按 AGENTS.md 第 9 条确认再实现。B 是闭环前的状态/时序验收；C/D 才让控制输出影响仿真。首轮数值示例不冻结真机参数；尚未初始化独立 Git 或提交。
+2026-09-29 用户确认并完成 A 批；09-30 细化 B 批设计并清理重复文档；10-02 用户确认 B 批后完成实现与接线验证。B 是闭环前的状态/时序验收；C/D 才让控制输出影响仿真。首轮数值示例不冻结真机参数。沿用用户已建立的 Control_Sys_AUV 主仓库和 USTROV 子模块，本次没有自动提交。
 
 
 ## 9. B 批：Hippo 状态接入与轨迹预览的具体设计
 
-日期 2026-09-30。**本节待本次讲解后的用户确认，尚未创建实现文件。** 本批的验收结果是状态、坐标、仿真时间与参考显示接通；首轮真正的 SIL 闭环继续按 C/D 的纵向 PD＋姿态保持推进。
+设计日期 2026-09-30；2026-10-02 用户“开始执行”确认后已实现。本批完成状态、坐标、仿真时间与参考显示接通；首轮真正的 SIL 闭环继续按 C/D 的纵向 PD＋姿态保持推进。新增 14 个 C++ 测试通过，实际 Hippo 的预览、暂停、故障/复位及改名实例已运行；已发现的世界重置限制和结果统一见 README §7。
 
 ### 9.1 系统目标与复用范围
 
@@ -347,7 +347,7 @@ Hippo 真值 → fake_state_estimator → /uuv00/odometry
 
 ### 9.4 文件、类和每个函数
 
-以下是 B 批计划新增的全部 C++ 实现文件；已有数学核心只被链接，不增加 ROS 依赖。
+以下是 B 批实际新增的 C++ 实现文件；已有数学核心只被链接，不增加 ROS 依赖。
 
 | 文件/类/函数 | 输入 → 输出 | 内部状态、步骤及调用 |
 |---|---|---|
@@ -373,7 +373,7 @@ Hippo 真值 → fake_state_estimator → /uuv00/odometry
 
 createTrajectory 和 makePathMessage 在同一节点头文件中声明为命名空间纯函数，源码定义；由节点与测试共用，不另外建立“框架”类。最终签名按上述输入输出落实，算法核心仍不依赖消息类型。
 
-新增构建声明：rov_control_ros/CMakeLists.txt 和 package.xml，链接 rov_control_core，依赖 rclcpp、nav_msgs、geometry_msgs、diagnostic_msgs、std_srvs 及测试工具。rov_bringup/CMakeLists.txt 和 package.xml 只安装 launch/config/rviz，声明预览节点与仿真/RViz/launch_xml 运行依赖。此处不提前链接 GeometricController，C 批执行适配器再链接 ustrov_control。
+新增构建声明：rov_control_ros/CMakeLists.txt 和 package.xml，链接 rov_control_core，依赖 rclcpp、rcl_interfaces、nav_msgs、geometry_msgs、diagnostic_msgs、std_srvs 及测试工具。rcl_interfaces 用于拒绝运行时参数修改，避免参数显示值与内部配置不同。rov_bringup/CMakeLists.txt 和 package.xml 只安装 launch/config/rviz，声明预览节点与仿真/RViz/launch_xml 运行依赖。此处不提前链接 GeometricController，C 批执行适配器再链接 ustrov_control。
 
 ### 9.5 启动、参数和 ROS 1 迁移
 
@@ -385,7 +385,7 @@ createTrajectory 和 makePathMessage 在同一节点头文件中声明为命名�
 | config/preview.yaml | 参数类型与教学起步值：length=0.2 m、v_max=0.08 m/s、a_max=0.1 m/s²、T_min=0.1 s；world=map；显示点数 101；其余时效/边界按本机模型明确配置 |
 | rviz/trajectory_preview.rviz | Fixed Frame=map，显示 Odometry、planned_path 和 reference_pose；命名空间通过启动配置/话题重映射处理，验证 uuv00 后再验证改名实例 |
 
-空间边界由仿真模型和生成位姿核验后写入，标明“仿真参考点活动范围”，不复制 A 批原点周围的测试盒，也不当作真实池标定。0.2 m 等数值仅是首个预览例子，闭环增益/控制限幅另行设计和测试。
+空间边界已按模型和生成位姿核验后写入：pool.dae 的 unit=0.2、Z_UP，平移 (1,2,-1.5) 后可视外包围约 x[-0.101,2.101]、y[-0.101,4.101]、z[-1.515,0.05] m。预览盒选 [0.8,0.5,-1] 至 [1.8,1.7,0]，只作为起始位置附近的参考中心活动范围；没有把可视网格当作碰撞/安全验证。0.2 m 等数值仅是预览例子，闭环增益/限幅另行设计。timer=0.02 s，ROS 状态最大年龄=0.25 s、未来容差=0.05 s、steady 接收最大间隔=2 s，均在 YAML 中说明。
 
 本机 /opt/ros/jazzy/lib/python3.12/site-packages/launch_xml/parser.py 的 get_file_extensions() 明确包含 launch.xml、xml、launch，所以 .launch 后缀可直接使用。所有自有入口采用 .launch；USTROV 作为外部依赖保留其现有 Python 入口，由 XML include 复用，不把重写第三方启动作为学习前置项。
 
@@ -412,7 +412,7 @@ createTrajectory 和 makePathMessage 在同一节点头文件中声明为命名�
 
 ### 9.7 如何运行和判断这一批通过
 
-待实现后的构建/启动命令集中在 README §6，不重复维护第二套。预期操作：source 三层工作区 → colcon 构建新包 → hippo_preview.launch → start 服务 → 看 RViz 与 diagnostics → stop；已有 Hippo 时只启动 trajectory_preview.launch。
+已验证的构建/启动命令集中在 README §5–6，不重复维护第二套。操作：source 三层工作区 → colcon 构建新包 → hippo_preview.launch → start 服务 → 看 RViz 与 diagnostics → stop；已有 Hippo 时只启动 trajectory_preview.launch。路径移动后本次产物放 build/batch_b 和 install-b。
 
 验收按实际顺序：
 
@@ -450,6 +450,6 @@ createTrajectory 和 makePathMessage 在同一节点头文件中声明为命名�
 
 ### Git 与文件维护
 
-自研包使用 rov_ 前缀，依赖方向为 ROV_Control → USTROV。将来用 dependencies.repos 固定外部 commit，必要的上游修复独立维护；本次无上游修改。仿真子集不需 PX4 underlay，完整硬件工程再按依赖加载。保留一份自研源码，通过 WSL /mnt/c 构建，不另建会分叉的编辑副本。
+自研包使用 rov_ 前缀，依赖方向为 ROV_Control → USTROV。2026-10-02 用户已将两者放入 Control_Sys_AUV 主仓库，USTROV 为固定 commit 的 Git 子模块；沿用这一组织，不再另加重复的版本清单。必要的上游修复独立维护，本次无上游修改。仿真子集不需 PX4 underlay，完整硬件工程再按依赖加载。保留一份自研源码，通过 WSL /mnt/c/DeskFiles/MPC-Mamba/Control_Sys_AUV/ROV_Control 构建，不另建会分叉的编辑副本。主仓库 AGENTS.md 按用户要求暂时忽略；正式 C++ 单元测试源码继续受版本管理。
 
 文件约定：README 放当前可执行步骤与结果；本文件维护设计和下一批接口；MPC_LEARNING_ROADMAP 保留理论/选型。根目录规则、证据和决策分别维护。删除重复过程稿前迁移有效信息并修复链接；不新增仅复述进展的日报/批次 .md。

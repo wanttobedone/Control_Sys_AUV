@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- ROS 2 XML：include 复用上游入口，只有一套 Gazebo、状态桥和 mixer。 -->
+  <arg name="vehicle_name" default="uuv00" description="机器人命名空间"/>
+  <arg name="start_gui" default="true" description="显示 Gazebo 窗口"/>
+  <include file="$(find-pkg-share ustrov_sim)/launch/top_hippocampus_complete.launch.py">
+    <arg name="vehicle_name" value="$(var vehicle_name)"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="start_gui" value="$(var start_gui)"/>
+    <arg name="spawn_apriltags" value="false"/>
+    <arg name="use_vertical_camera" value="false"/>
+    <arg name="fake_state_estimation" value="true"/>
+  </include>
+</launch>

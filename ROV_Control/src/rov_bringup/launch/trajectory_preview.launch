@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 已有 Hippo 仿真时使用这个入口，避免再开一个 Gazebo/mixer。 -->
+  <arg name="vehicle_name" default="uuv00"/>
+  <arg name="start_rviz" default="true"/>
+  <arg name="config_file" default="$(find-pkg-share rov_bringup)/config/preview.yaml"/>
+  <node pkg="rov_control_ros" exec="trajectory_preview_node"
+        name="trajectory_preview" namespace="$(var vehicle_name)" output="screen">
+    <param from="$(var config_file)"/>
+    <!-- ROS 2 的 use_sim_time 按节点设置；后写参数覆盖 YAML。 -->
+    <param name="use_sim_time" value="true"/>
+    <param name="body_frame" value="$(var vehicle_name)/base_link"/>
+  </node>
+  <node if="$(var start_rviz)" pkg="rviz2" exec="rviz2" name="preview_rviz"
+        namespace="$(var vehicle_name)" output="screen"
+        args="-d $(find-pkg-share rov_bringup)/rviz/trajectory_preview.rviz">
+    <param name="use_sim_time" value="true"/>
+    <env name="QT_QPA_PLATFORM" value="xcb"/>
+    <!-- RViz 文件使用固定占位话题，映射后可切换 vehicle_name。 -->
+    <remap from="/preview/odometry" to="/$(var vehicle_name)/odometry"/>
+    <remap from="/preview/planned_path" to="/$(var vehicle_name)/trajectory_preview/planned_path"/>
+    <remap from="/preview/reference_pose" to="/$(var vehicle_name)/trajectory_preview/reference_pose"/>
+  </node>
+</launch>

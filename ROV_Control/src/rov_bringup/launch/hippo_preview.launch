@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 总入口：先组织依赖，不通过固定 sleep 猜测仿真是否准备好。
+       预览节点自己等待第一份有效状态，用户再调用 start。 -->
+  <arg name="vehicle_name" default="uuv00"/>
+  <arg name="start_gui" default="true"/>
+  <arg name="start_rviz" default="true"/>
+  <arg name="config_file" default="$(find-pkg-share rov_bringup)/config/preview.yaml"/>
+  <include file="$(find-pkg-share rov_bringup)/launch/hippo_sim.launch">
+    <arg name="vehicle_name" value="$(var vehicle_name)"/>
+    <arg name="start_gui" value="$(var start_gui)"/>
+  </include>
+  <include file="$(find-pkg-share rov_bringup)/launch/trajectory_preview.launch">
+    <arg name="vehicle_name" value="$(var vehicle_name)"/>
+    <arg name="start_rviz" value="$(var start_rviz)"/>
+    <arg name="config_file" value="$(var config_file)"/>
+  </include>
+</launch>

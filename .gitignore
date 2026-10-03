@@ -1,0 +1,39 @@
+# 本地 agent 工作约定（当前不提交；文件继续保留在电脑上）
+/AGENTS.md
+/agents.md
+
+# ROS / CMake 构建、安装和日志产物
+**/build/
+**/build-*/
+**/install/
+**/install-*/
+**/log/
+**/logs/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/Testing/
+**/test_results/
+**/test-results/
+*.log
+
+# 临时验证与记录数据；正式 src/*/test/*.cpp 仍进入 Git
+/tmp/
+**/.cache/
+**/bags/
+**/rosbag2_*/
+*.db3
+*.db3-shm
+*.db3-wal
+*.mcap
+*.gcda
+*.gcno
+coverage/
+
+# 编辑器/操作系统临时文件
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc

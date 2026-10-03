@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>rov_control_ros</name>
+  <version>0.1.0</version>
+  <description>C++ state adapter and read-only trajectory preview.</description>
+  <!-- 与核心一致：维护者/许可证待项目所有者确定，不能当作正式发布声明。 -->
+  <maintainer email="maintainer@example.invalid">ROV_Control maintainer</maintainer>
+  <license>TODO</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rov_control_core</depend>
+  <depend>rclcpp</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>std_srvs</depend>
+  <test_depend>gtest</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

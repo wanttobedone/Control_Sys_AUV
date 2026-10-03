@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>rov_bringup</name>
+  <version>0.1.0</version>
+  <description>XML launch and configuration for Hippo trajectory preview.</description>
+  <maintainer email="maintainer@example.invalid">ROV_Control maintainer</maintainer>
+  <license>TODO</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>rov_control_ros</exec_depend>
+  <exec_depend>ustrov_sim</exec_depend>
+  <exec_depend>ustrov_control</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>launch_xml</exec_depend>
+  <exec_depend>ros2launch</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>
