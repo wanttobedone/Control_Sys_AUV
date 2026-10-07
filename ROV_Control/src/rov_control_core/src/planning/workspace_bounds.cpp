@@ -29,12 +29,8 @@ Status validateBounds(const WorkspaceBounds &bounds)
 
 bool contains(const WorkspaceBounds &bounds, const Eigen::Vector3d &p_W)
 {
-  // 无效输入直接判为不在允许空间内。
-  if (!validateBounds(bounds).ok() || !p_W.allFinite())
-  {
-    return false;
-  }
-
+  // bounds 在参数/规划入口校验一次；逐轴比较自然拒绝 NaN 和越界点。
+  // 控制周期不再重复校验同一份不变的配置。
   // Eigen 的 array() 在这里表示逐元素比较，all() 表示三个轴同时满足。
   bool aboveMinimum = (p_W.array() >= bounds.min_W.array()).all();
   bool belowMaximum = (p_W.array() <= bounds.max_W.array()).all();
@@ -42,8 +38,7 @@ bool contains(const WorkspaceBounds &bounds, const Eigen::Vector3d &p_W)
   return aboveMinimum && belowMaximum;
 }
 
-bool containsSegment(const WorkspaceBounds &bounds,
-                     const Eigen::Vector3d &p0_W,
+bool containsSegment(const WorkspaceBounds &bounds, const Eigen::Vector3d &p0_W,
                      const Eigen::Vector3d &p1_W)
 {
   // 轴对齐盒子是凸集，两个端点都在里面即可保证整条直线位于盒内。
@@ -54,4 +49,4 @@ bool containsSegment(const WorkspaceBounds &bounds,
   return startInside && goalInside;
 }
 
-}  // 命名空间 rov_control_core
+} // namespace rov_control_core

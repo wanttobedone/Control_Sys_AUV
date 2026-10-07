@@ -2,7 +2,7 @@
 <package format="3">
   <name>rov_control_ros</name>
   <version>0.1.0</version>
-  <description>C++ state adapter and read-only trajectory preview.</description>
+  <description>C++ state adapter, trajectory preview and finite Hippo input probe.</description>
   <!-- 与核心一致：维护者/许可证待项目所有者确定，不能当作正式发布声明。 -->
   <maintainer email="maintainer@example.invalid">ROV_Control maintainer</maintainer>
   <license>TODO</license>
@@ -14,6 +14,12 @@
   <depend>geometry_msgs</depend>
   <depend>diagnostic_msgs</depend>
   <depend>std_srvs</depend>
+  <depend>ustrov_control_msgs</depend>
+  <depend>tf2_ros</depend>
+  <!-- motor_probe 的可选构建依赖；纯仿真构建默认关闭对应 CMake 选项。 -->
+  <depend>px4_msgs</depend>
+  <test_depend>ustrov_core</test_depend>
   <test_depend>gtest</test_depend>
+  <test_depend>rosgraph_msgs</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

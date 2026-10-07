@@ -15,7 +15,8 @@ namespace rov_control_core
 Status validateBounds(const WorkspaceBounds &bounds);
 
 // 输入：允许空间、待查世界系点 [m]。输出：是否在盒内，包含边界。
-// 参数无效或出现 NaN/Inf 时返回 false，不把异常点判成有效点。
+// bounds由参数/规划入口经validateBounds检查；这里仅做几何包含判断。
+// 有效有限边界下，NaN/Inf点自然无法通过逐轴比较。
 bool contains(const WorkspaceBounds &bounds, const Eigen::Vector3d &p_W);
 
 // 输入：允许空间、线段两个端点 [m]。输出：整条线段是否位于盒内。

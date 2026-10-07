@@ -1,0 +1,13 @@
+/**:
+  ros__parameters:
+    # 这里只生成归一化单电机输入；真实方向/接线在 bridge 配置及 PX4 输出功能中确认。
+    # 参数按启动快照使用，修改后需停止并重启节点，运行中不允许更改波形。
+    # channel/amplitude 由 motor_probe.launch 的参数传入，避免改 YAML 后又被覆盖。
+    ramp_s: 0.5
+    hold_s: 0.5
+    output_rate_hz: 50.0
+    arm_timeout_s: 25.0
+    bridge_output_timeout_s: 0.3
+    command_topic: thruster_command
+    bridge_arm_service: px4_actuator_bridge/arm
+    bridge_stop_service: px4_actuator_bridge/stop

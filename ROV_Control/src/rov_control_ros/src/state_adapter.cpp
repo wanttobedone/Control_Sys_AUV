@@ -8,7 +8,7 @@ using rov_control_core::Result;
 using rov_control_core::RobotState;
 
 StateAdapter::StateAdapter(const std::string &worldFrame, const std::string &bodyFrame)
-  : worldFrame_(worldFrame), bodyFrame_(bodyFrame)
+    : worldFrame_(worldFrame), bodyFrame_(bodyFrame)
 {
 }
 
@@ -24,11 +24,11 @@ Result<RobotState> StateAdapter::convert(const nav_msgs::msg::Odometry &message)
   {
     return Result<RobotState>::failure(ErrorCode::INVALID_ARGUMENT, "消息时间戳格式非法");
   }
-  const std::int64_t stampNs = static_cast<std::int64_t>(stamp.sec) * 1000000000LL
-    + static_cast<std::int64_t>(stamp.nanosec);
+  const std::int64_t stampNs = static_cast<std::int64_t>(stamp.sec) * 1000000000LL +
+                               static_cast<std::int64_t>(stamp.nanosec);
   if (lastStampNs_ && stampNs <= *lastStampNs_)
   {
-    return Result<RobotState>::failure(ErrorCode::INVALID_ARGUMENT, "消息时间重复或倒退，请复位");
+    return Result<RobotState>::failure(ErrorCode::INVALID_ARGUMENT, "消息时间重复或乱序");
   }
 
   RobotState state;
@@ -37,12 +37,12 @@ Result<RobotState> StateAdapter::convert(const nav_msgs::msg::Odometry &message)
   const auto &twist = message.twist.twist;
   state.p_W = Eigen::Vector3d(pose.position.x, pose.position.y, pose.position.z);
   // Eigen 构造顺序是 w,x,y,z；ROS 消息字段排列是 x,y,z,w，不能直接复制数组。
-  state.q_WB = Eigen::Quaterniond(pose.orientation.w, pose.orientation.x,
-                                 pose.orientation.y, pose.orientation.z);
+  state.q_WB = Eigen::Quaterniond(pose.orientation.w, pose.orientation.x, pose.orientation.y,
+                                  pose.orientation.z);
   const Eigen::Vector3d velocityB(twist.linear.x, twist.linear.y, twist.linear.z);
   state.omega_B = Eigen::Vector3d(twist.angular.x, twist.angular.y, twist.angular.z);
-  if (!state.p_W.allFinite() || !state.q_WB.coeffs().allFinite()
-      || !velocityB.allFinite() || !state.omega_B.allFinite())
+  if (!state.p_W.allFinite() || !state.q_WB.coeffs().allFinite() || !velocityB.allFinite() ||
+      !state.omega_B.allFinite())
   {
     return Result<RobotState>::failure(ErrorCode::NON_FINITE, "状态包含 NaN 或 Inf");
   }
@@ -66,4 +66,4 @@ void StateAdapter::reset()
 {
   lastStampNs_.reset();
 }
-}
+} // namespace rov_control_ros

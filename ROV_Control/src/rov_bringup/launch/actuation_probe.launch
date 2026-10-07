@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 已有 Hippo 时只用此入口，不能再同时启动另一个 setpoint 发布者。 -->
+  <arg name="vehicle_name" default="uuv00"/>
+  <arg name="channel" default="surge" description="surge/roll/pitch/yaw，单次只选一轴"/>
+  <arg name="amplitude" default="0.0" description="无量纲幅值，绝对值不超过 0.65"/>
+  <arg name="config_file" default="$(find-pkg-share rov_bringup)/config/actuation_probe.yaml"/>
+  <node pkg="rov_control_ros" exec="actuation_probe_node" name="actuation_probe"
+        namespace="$(var vehicle_name)" output="screen">
+    <param from="$(var config_file)"/>
+    <param name="use_sim_time" value="true"/>
+    <param name="body_frame" value="$(var vehicle_name)/base_link"/>
+    <param name="channel" value="$(var channel)"/>
+    <param name="amplitude" value="$(var amplitude)" type="float"/>
+  </node>
+</launch>

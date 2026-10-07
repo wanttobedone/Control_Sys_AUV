@@ -1,297 +1,166 @@
-# 路径规划与轨迹跟踪：从直线基线到 MPC
+# 路径规划与轨迹跟踪：从水平到点到 MPC
 
-设计日期：2026-09-28；状态更新：2026-10-02。**A/B 批经用户确认后已实现并验证；C–G 批仍为待确认设计。**已完成部分见 [使用说明](../README.md)。本文件 C–G 的类、节点和话题仍是规划，不能据此认为已存在。算法、节点、测试均为 C++17；XML/YAML/CMake 为声明文件。
+更新：2026-10-06。参数与检查职责整理见 §6.1。A/B/C1 及水平 XY 到点闭环已实现。用户授权完成在环部分，并明确选择沿用 Hippo 四推进器、深度仅监测。本文 §1–8 是当前实现；§9–11 保留预览和有限输入入口的具体设计。原先拟议的空控制接口、normalized effort PD 和上游姿态库封装方案已由当前物理分配方案替代，不创建这些空类。
 
-命名与排版于 2026-09-29 按用户 Glider_sim 工程同步：自研头文件用 `.h`、函数用小驼峰、源码写中文解释。下文未实现接口也使用这一约定，上游既有接口保留原名。
+## 1. 系统目标
 
-## 1. 当前目标与范围
+向 `/<vehicle>/goal` 发布一次 `PointStamped`，机器人在水平面到达该点并进入容差保持。坐标原点取本节点收到的第一条有效 Odometry，x 沿当时机头的水平投影、y 向左、z 向上；之后固定。它是软件启动原点，不声称等于真实硬件通电瞬间。完整重启重新建立，故障复位保留。
 
-用户决定：视觉闭环保留到后续，优先直接在真实相机、最终防水窗和水环境中验证，不要求先实现视觉仿真。室内浅池、下视 AprilTag、相机＋镜头＋防水预算 2500 元以内的需求保留。视觉接入时再做采集、标定、定位、融合、失效处理；控制器通过统一状态接口接收结果。
+当前是 Gazebo + 自研 C++ 控制器的软件在环，没有 PX4 固件在环。状态由真值桥提供，不是 VINS/INS 融合验证。目标 z 必须为0，表达“只请求水平运动”；深度不闭环。真实浅池下视 AprilTag、相机/镜头/防水合计2500元内的需求保留到后续真实设备验证。
 
-当前先在 Gazebo 真值反馈下建立可解释的规划与跟踪链。它验证算法、接口、时序和动力学响应，不代替真机标定，也不是 Pixhawk HIL。现已完成模型/状态通路与自研参考预览，尚无本工程轨迹跟踪结果。
+## 2. 整体架构与复用边界
 
-### 三个概念
-
-| 层 | 问题 | 输入 → 输出 | 初版 |
-|---|---|---|---|
-| 路径规划 | 从哪里走到哪里，几何上经过哪里？ | 起点、终点、可用空间 → 曲线 p(s) | 已知空旷区域中的单条直线，拒绝越界；没有障碍搜索 |
-| 轨迹生成 | 什么时候走到哪里，速度/加速度是多少？ | 路径、运动限制 → p(t)、v(t)、a(t) | 五次时间律，静止出发、静止结束 |
-| 轨迹跟踪 | 现在有误差，应怎样驱动？ | 实际状态、带时间参考 → 控制命令 | 先纵向 PD + 姿态保持，再以 MPC 替换纵向 PD |
-
-几何路径跟随可以只要求靠近曲线；本任务先做有明确时序的轨迹跟踪。A*、RRT、障碍地图、在线重规划不属于第一批，待确有障碍任务后再引入。
-
-## 2. 源码证据与复用边界
-
-核查版本：USTROV b1208e50becb9f74d4d0dcd8637ac11e73d3672a；本轮为 Windows 源码只读检查，未执行控制试验。
-
-| 现有部分 | 本阶段处理 | 依据及限制 |
-|---|---|---|
-| ustrov_sim、hippo3、动力学插件、static_bridge | 复用 | 提供仿真被控体和执行通路；参数属于 Hippo，不能当作真机标定 |
-| fake_state_estimator → odometry | 复用作仿真反馈 | 当前转发真值，不是 INS/VINS/EKF 验证 |
-| ustrov_control::attitude_control::GeometricController | 在 ROS 适配包中封装、调用其计算库 | CMake 导出了 attitude_control 库；不启动另一个姿态控制节点。Update 本身未做限幅，封装必须检查输出 |
-| 已运行 actuator_command_mixer | 首轮受限仿真复用，保持唯一实例 | 当前 spawn_hippocampus 已创建；不叠加上游整套 attitude launch |
-| TrackingControllerNode | 阅读参考，首版不直接连接 | 位置取世界系，速度直接取 twist；当前插件 twist 是机体系。输出 attitude_target 与默认 geometric 节点的 heading_target 接口也不同 |
-| src/nodes/attitude_control_node.cpp | 不据文件存在就接入 | 有 attitude_target 订阅，但当前 CMake 未把这个源文件列入构建；不默认可启动 |
-| path_planning::PathFollowerNode | 不接入 | 上游示例 launch 引用了它，当前仓库未包含该包 |
-| 视觉、真正估计器、PX4 桥 | 后续阶段 | 本轮不改桥、安全状态机或估计器；旧独立俯仰测试不读、不复用 |
-
-需要特别理解：
-
-1. 当前 Hippo 的直接输入为 body-x 推力和三个力矩；没有独立 body-y/body-z 推力。真实四推进器布局仍未知，两者不能等同。
-2. 初版直线沿初始水平朝向，主动控制沿线位置/速度及姿态；**侧向和深度只监测，不构成完整三维轨迹跟踪或定点保持**。模型有正浮力，深度可能漂移。漂移使有限时段试验无法通过时，先分析浮力/深度控制方案，不暗改模型让结果好看。
-3. 首轮终点要求沿线速度降至零，但不能承诺三维悬停。试验结束即退出到不输出控制的状态。
-4. 当前水池 xacro 只有可视网格，未定义池壁碰撞体。可视水池不能承担碰撞约束；需显式配置经核验的可用空间。
-5. normalized mixer 的 thrust/torque 是命令域量；初版称为 effort，无单位，不能标 N/N·m。实际推进器输出仍有非线性、滞后和耦合饱和。
-
-## 3. 第一版系统结构与数据流
+- `rov_control_core`：Eigen/C++17 纯计算，无 ROS 时钟、话题或文件读写。
+- `rov_control_ros`：状态适配、home、回调、运行保护、命令和显示发布。
+- `rov_bringup`：XML `.launch`、YAML、RViz。
+- USTROV 固定版本 `b1208e50becb9f74d4d0dcd8637ac11e73d3672a`：复用世界、原 Hippo、浮力/水动力/推进器插件、状态桥和 TF。本轮没有修改上游。
+- 新入口直接 include `spawn_vehicle.launch.py`，不 include 会启动 mixer 的 `spawn_hippocampus.launch.py`。四路物理分配由自己的 `HippoAllocator` 完成。
+- 原预览和 C1 probe 仍各自保留，不能与到点节点同时控制同一实例。原 geometric 姿态库、未实现的 PathFollower、旧 pitch_mpc、PX4、相机不接入这次闭环。
 
 ```text
-YAML：目标相对位移、空间边界、速度/加速度限制、PD、命令限幅
-                            ↓
-/uuv00/odometry → StateAdapter → RobotState
-                                  ↓ 首次显式 start 且状态有效
-                         LinePathPlanner::plan
-                                  ↓ LinePath
-                      QuinticTrajectory::create
-                                  ↓ 一条不可变的轨迹
-每个有效控制周期：
-ROS 时间 → 轨迹时间 → sampleHorizon → 带时间参考
-RobotState → projectProgress → 沿线位置/速度
-              ↓                         ↓
-        IProgressController::compute（先 PD，后 MPC）
-                                  ↓ surge_effort_requested
-RobotState → HippoActuationAdapter（上游姿态库 + 显式命令限幅）
-                                  ↓
-           thrust_setpoint + torque_setpoint → 唯一 mixer
-                                  ↓ thruster_command
-                         static_bridge → Gazebo
-                                  ↓ odometry
-
-RunGuard 对整次输出统一放行/终止；每周期记录状态、参考、请求/发送命令和原因。
-Path / Pose 等 ROS 消息用于显示；控制核心直接使用同一份 C++ 轨迹对象。
+PointStamped(home) → onGoal → HomeFrame::toWorld → PlanarTracker::setGoal
+Odometry → onOdometry → StateAdapter::convert → RobotState
+YAML → loadConfig → PlanarConfig / 运行监测阈值
+/clock → ROS时间增量 ──────────────────────────┐
+wall 20ms → onTimer → checkState/checkGraph   │
+  → PlanarTracker::update(state,dt) ←─────────┘
+    制动 → 转向 → LinePathPlanner + QuinticTrajectory
+    sample + projectProgress → 纵向PD/前馈 + LOS航向 + 姿态PD
+  → TrackingOutput(Fx, Mx, My, Mz)
+  → HippoAllocator::allocate → ActuatorControls(前4路，后4路零)
+  → thruster_command → 外部bridge → Gazebo推进器/机体
+  → 新Odometry → 下一控制周期
+参考/实际轨迹/目标/home/误差/控制量 → RViz、diagnostics、rosbag
 ```
 
-C/D 阶段计划用一个 C++ tracking_node 承载算法对象，单线程 executor 顺序处理回调。类之间通过函数调用交换一致快照，先不把每个类拆成 ROS 节点。这样参考位置、速度和加速度不会来自互不同步的三个订阅缓存。
-
-### 坐标与时钟
-
-- W = map，米、秒、弧度；仿真 z 轴向上，水下 z 通常为负，深度为正的传感器值须在其适配处转换。
-- B = uuv00/base_link，ROS 机体系；q_WB 表示从 B 到 W 的旋转。
-- 当前 Odometry：位置/姿态在 map；线速度和角速度在 child_frame_id。StateAdapter 计算 **v_W = R(q_WB) v_B**，保留 omega_B。
-- 第一版只接受明确配置的这两个 frame，不把未知 frame_id 直接改字符串当作完成转换。未来不同 frame 经 TF/外参适配后输入核心。
-- 轨迹时间用 ROS 时钟；仿真 use_sim_time=true。接收间隔和卡死检测用 steady clock。仿真暂停不继续推进轨迹；长时间无数据或时间倒退锁存停止，恢复后需要重新 start，不自动继续旧轨迹。
-- 50 Hz 仅为与当前模型配置对齐的起步候选；正式周期根据实测消息率、抖动和处理时间确定。状态新鲜度阈值为显式配置。
-
-依据：已读 ROS 官方 Jazzy [Odometry.msg 全文](https://github.com/ros2/common_interfaces/blob/jazzy/nav_msgs/msg/Odometry.msg)和 [Path.msg 全文](https://github.com/ros2/common_interfaces/blob/jazzy/nav_msgs/msg/Path.msg)。Path 包含 PoseStamped 数组，没有显式速度/加速度字段，故不作为完整控制参考的内部结构。
-
-## 4. 核心数据结构（A 批相关部分已实现）
-
-下表为总体接口。A 批已定义 RobotState、WorkspaceBounds、MotionLimits、PlanRequest、ReferenceSample、ProgressState 及错误返回；LinePath 为 line_path.h 中的只读类。控制命令、运行状态和日志类型留到后续批次，未创建空实现。Eigen 向量/四元数只用于数学核心，不包含 rclcpp、Gazebo、USTROV 消息。
-
-| 类型 | 字段、单位与含义 |
-|---|---|
-| RobotState | stamp_ns；p_W[m]、q_WB、v_W[m/s]、omega_B[rad/s]。时间戳的时钟域由适配层保证，核心不自行读系统时钟 |
-| WorkspaceBounds | 允许机体中心进入的 min_W/max_W；这些界限已减去机体半径、挂载及余量，不能直接填池子外形尺寸 |
-| MotionLimits | v_max[m/s]、a_max[m/s²]、可选 j_max[m/s³]、min_duration[s]；均为正数且有限 |
-| PlanRequest | p_start_W、p_goal_W、起始朝向/速度、WorkspaceBounds；首版执行模式还要求目标在初始水平前向直线上，且起速足够小 |
-| LinePath | p0_W、单位方向 d_W、长度 L[m]；s∈[0,L] |
-| ReferenceSample | t_from_start[s]、s/v_s/a_s，p_W/v_W/a_W，q_WB_des、omega_B_des；首版姿态常值，期望角速度为零 |
-| ProgressState | s=d·(p−p0)、v_s=d·v_W；横向误差、深度偏差作为诊断。实际 s 不裁剪到 [0,L]，否则会隐藏超调 |
-| ControlContext | dt[s]、previous_sent_surge_effort；后者为上一周期实际发送的请求，不能声称为真实测得推力 |
-| ProgressCommand | requested_surge_effort、valid、status；明确为 normalized 命令域 |
-| HippoEffortCommand | surge_effort、torque_effort_B；全为命令域量，映射到现有 normalized mixer |
-| RunStatus / GuardResult | IDLE、PREVIEW、RUNNING、FINISHED、FAULT；放行布尔值、原因枚举。FAULT 锁存 |
-| StepRecord | run_id、序号、状态/控制时间、状态年龄、参考/实际状态、误差、原始/限幅命令、饱和标志、周期耗时、模式/故障原因 |
-
-所有构造/计算都返回显式成功或错误；NaN、零范数四元数、非法限幅、零长度路径等不能默默继续。第一版零长度目标返回“无需运动”，不进入姿态/推力计算。
-
-## 5. 算法：先把最小闭环算明白
-
-### 5.1 路径与时间分开
-
-直线：p(s)=p0+d·s，d=(p1−p0)/L。已有空旷凸盒区域内，检查缩小后的边界包含两个端点，即能保证线段在盒内；这不等于一般环境碰撞检测。
-
-令 τ=t/T，0≤τ≤1：
-
-- h(τ)=10τ³−15τ⁴+6τ⁵
-- s(t)=L·h(τ)
-- v_s(t)=L/T·h′(τ)，a_s(t)=L/T²·h″(τ)
-- p_ref=p0+d·s，v_ref=d·v_s，a_ref=d·a_s
-
-由解析峰值选时间：T≥max(T_min, 1.875L/v_max, sqrt((10√3/3)L/a_max))。若启用 jerk 限制，再要求 T≥cbrt(60L/j_max)。这是直线路径的运动学约束，不证明驱动能力可实现。
-
-t<0 采样起点，t>T 采样终点，速度/加速度为零。五次曲线与静止段连接为位置/速度/加速度连续，jerk 不保证连续；不把它称为最优轨迹。首版拒绝运行中突然改目标，需要停止后重建，避免参考跳变。
-
-### 5.2 纵向 PD 基线
-
-e_s=s_ref−s，e_v=v_ref−v_s。
-
-effort_requested=k_p·e_s+k_d·e_v。
-
-- k_p、k_d 的单位对应“命令域量/米”和“命令域量/(米/秒)”；不是物理力模型参数。
-- 速度项直接用状态速度，不对位置误差做噪声敏感的差分。
-- 先不用积分或未经验证的加速度前馈；ReferenceSample 仍保留加速度供后续模型前馈/MPC 使用。
-- 封装层按幅值与变化率限制纵向 effort，并单独限制姿态 effort。首版要求朝向接近路径方向，偏离超过容限立即退出，不能靠除以接近零的 cos(angle) 追求不可能的瞬时运动。
-- 反向纵向 effort 用于减速前必须在 Gazebo 验证符号及实际响应；推进器布局/曲线未经核验时不写死真实映射。
-
-### 5.3 MPC 的位置
-
-后续保留路径与轨迹生成器，替换 IProgressController 的实现。MPC 一次读取未来 N 个时间点的参考，而 PD 只使用第一个参考。
-
-先验证局部命令域模型，例如 x=[s,v_s] 或加入推进器滞后状态，x(k+1)=A x(k)+B effort(k)。若指令到力的关系在试验区间明显非线性，应重选线性化工作点/映射或升级模型，不能默认从零油门附近得到恒定非零控制增益。质量/附加质量不从 xacro 不加核验地抄入。
-
-依次讲解：离散模型 → 预测展开 → Q/R 与输入变化惩罚 → 幅值/变化率约束 → OSQP → 求解状态/失败行为 → 同轨迹与 PD 对比。此时再冻结 model/prediction/qp_builder/osqp_backend/linear_mpc 的函数签名，详见 MPC_LEARNING_ROADMAP.md §7；不在首批创建空实现。
-
-## 6. 拟议文件架构与每个函数职责
-
-保留三个包。纯计算的规划和控制暂在同一库中，以子目录区分；规模增大后可以拆包，无需一开始建立很多节点/消息包。
+## 3. 运行流程、时钟与失效边界
 
 ```text
-ROV_Control/
-  docs/                              本设计 + MPC 学习路线
-  # USTROV 版本由父级主仓库的 Git 子模块固定，不另建 dependencies.repos
-  src/
-    rov_control_core/
-      CMakeLists.txt, package.xml
-      include/rov_control_core/
-        result.h                    A 批共用结果与错误返回
-        types.h
-        planning/workspace_bounds.h
-        planning/line_path.h
-        planning/quintic_trajectory.h
-        tracking/progress_controller.h
-        tracking/longitudinal_pd.h
-        runtime/run_guard.h
-      src/                           对上述有实现的 .h 各配同名 .cpp
-      test/
-        test_path_trajectory.cpp
-        test_tracking_guard.cpp
-    rov_control_ros/
-      CMakeLists.txt, package.xml
-      include/rov_control_ros/
-        state_adapter.h
-        trajectory_preview_node.h     B：仅做状态接入与参考显示
-        hippo_actuation_adapter.h
-        run_logger.h
-        tracking_node.h
-      src/                           对上述 .h 各配同名 .cpp
-        preview_main.cpp              B：已实现；跟踪入口后续另行设计
-      test/test_state_adapter.cpp
-      test/test_preview_math.cpp
-    rov_bringup/
-      CMakeLists.txt, package.xml
-      launch/hippo_sim.launch          B：封装外部仿真入口
-      launch/hippo_preview.launch      B：仿真 + 预览组合入口
-      launch/trajectory_preview.launch
-      launch/hippo_line_tracking.launch
-      config/preview.yaml              B：预览参数
-      rviz/trajectory_preview.rviz     B：显示配置
-      config/line_demo.yaml
-      config/hippo_sim.yaml
+WAIT_STATE → READY → 发布有效目标 → BRAKING → TURNING → TRACKING → HOLDING
+运动中换目标 → BRAKING → 重新转向/规划
+HOLDING 偏离5cm → BRAKING → 再接近
+stop → STOPPING(有限归零) → READY
+状态/时序/输出源异常 → FAULT(锁存、归零)
+恢复数据 + reset_fault → WAIT_STATE → READY → 需要重新发布目标
 ```
 
-文件与函数表为计划中的完整 V0 接口，不承诺一次全部实现。types.h 放状态与请求等数据结构，result.h 放错误码、Status 与 Result<T>；progress_controller.h 仅接口，无需为它创建空 .cpp。测试均用 C++。包元数据负责声明依赖、安装头文件/库/配置及测试，不含算法。
+- BRAKING：前向速度阻尼，水平速度<0.015m/s、|yaw角速度|<0.08rad/s连续0.25s才转向；已在目标圈内则直接保持。
+- TURNING：速度阻尼仍在，航向误差<0.04rad、|yaw角速度|<0.08rad/s、水平速度<0.02m/s连续0.3s后，从当前实测位置规划。
+- TRACKING：五次参考到终点后，水平误差<0.025m、速度<0.015m/s连续0.75s才报告HOLDING。参考结束和实际到达分开判断。
+- HOLDING：沿最终朝向抑制纵向漂移；横向没有直接推力，超过0.05m重新接近。不承诺横流中精确悬停或任意扰动下收敛。
+- ROS dt 推进参考，wall timer 检测停顿。状态年龄、接收/时钟停顿、最大正dt均由YAML指定，dt上限仅在ROS层检查。实际速度/倾斜/角速度/深度漂移也从YAML读取，0可关闭对应运动监测；原0.5m/s硬阈值已移除。单帧坏/重复/乱序Odometry被丢弃，不刷新有效接收时间；持续无有效反馈才按超时停止。时间倒退、活动盒越界仍归零并锁存FAULT。
+- 任务时限由mission_timeout_s指定，0关闭；保持期间不按任务超时退出。实际电机话题多发布者每1s检查，接受目标前再查。订阅者是否已发现、节点叫什么名字、无关setpoint话题均不作为许可条件；ROS图检测不是分布式互斥锁。
+- 故障/stop立即发零并补发0.5 wall秒；随后释放输出权限。正常SIGINT/SIGTERM在ROS context有效时完成归零。强杀/崩溃不能保证此路径；新入口无上游mixer watchdog，因此仅用于仿真，真机需独立下层看门狗。
 
-### 6.1 规划核心（A 批已完成）
+## 4. 数据结构与接口约定
 
-实施细化：PlanRequest 的前向启动条件放入可选 ForwardStartConstraint，几何规划可省略，后续首轮执行必须设置。projectProgress 为独立纯函数。类型/函数的实际名称和错误语义以源码及 ../README.md 为准。
-
-| 文件 / 类 | 函数：输入 → 输出 | 内部状态与调用关系 |
+| 类型 | 坐标/单位、内容 | 谁创建、谁消费 |
 |---|---|---|
-| planning/workspace_bounds.h/.cpp | validateBounds(bounds)→结果；contains(bounds,p)→bool；containsSegment(bounds,p0,p1)→bool | 纯函数；边界已包含机体余量，由 plan 调用 |
-| planning/line_path.h/.cpp / LinePathPlanner | plan(request)→LinePath 或错误；projectProgress(path,state)→ProgressState | 无缓存；plan 检查有限值、非零长度、范围及首版方向/起速条件；投影供控制与日志 |
-| planning/quintic_trajectory.h/.cpp / QuinticTrajectory | create(path,limits,attitude)→轨迹或错误；chooseDuration(L,limits)→T；sample(t)→ReferenceSample；sampleHorizon(t,dt,count,out)→结果；duration()→T | 保存不可变路径、T、常值姿态；Horizon 填预分配容器，避免每控制周期分配内存；count/dt 非法返回错误 |
-| test/test_path_trajectory.cpp | 测试端点、解析速度/加速度峰值、不同长度/时间尺度、时间越界、越界路线和零长度请求 | 独立用边界条件/解析峰值作期望，不仅验证实现返回了自己算的结果；首批不发执行器命令 |
+| RobotState | p_W[m]、v_W[m/s]、q_WB、omega_B[rad/s]、stamp_ns | StateAdapter → tracker/运行检查 |
+| HomeFrame | origin_W；q_WH只含初始yaw | 首条有效状态 → 目标转换、局部里程计、静态TF |
+| PlanarConfig | 活动盒、速度/加速度、PD/前馈、姿态增益、容差/超时 | YAML + 名义模型常量 → tracker |
+| LinePath | p0_W、单位方向、长度L | planFrom中的LinePathPlanner → 时间轨迹/投影 |
+| ReferenceSample | s/v_s/a_s、p_W/v_W/a_W、期望姿态 | QuinticTrajectory::sample → 控制/显示 |
+| ProgressState | 实际s、沿线速度、未裁剪投影及横向误差 | projectProgress → 纵向控制、LOS |
+| TrackingOutput | Fx[N]、torque_B_Nm、参考、误差、阶段、限幅 | update → allocator/诊断 |
+| AllocationOutput | 单桨物理力[N]、8槽油门、缩放系数、分配后wrench | allocate → ROS消息/诊断 |
 
-### 6.2 跟踪与运行状态
+W=`map`，B=`vehicle/base_link`，H=`vehicle/home`。q_WB把机体系转到世界系；Odometry的twist在B，适配器执行v_W=q_WB*v_B。目标转换为p_W=p_home_W+R_WH*p_H；当前姿态变化不改变R_WH。只改frame字符串不算坐标转换。
 
-| 文件 / 类 | 函数：输入 → 输出 | 内部状态与调用关系 |
-|---|---|---|
-| tracking/progress_controller.h / IProgressController | compute(state,horizon,context)→ProgressCommand；reset() | 接口只约束纵向控制；不冒充所有未来六轴控制的通用接口；horizon 非空且时间有序 |
-| tracking/longitudinal_pd.h/.cpp / LongitudinalPd | 构造参数 kp/kd；compute(...)→PD 请求；reset() | 只保存增益，首版无积分状态；使用 horizon 首元素；有限值检查；限幅交给唯一执行适配处 |
-| runtime/run_guard.h/.cpp / RunGuard | start(checks)→成功/拒绝；evaluate(state,reference,timing,errors)→GuardResult；finish()；stop(reason)；resetFault() | 保存 RunStatus、故障原因；输入时钟/年龄由 ROS 层传入。检查缺状态、时间跳变、异常 dt、边界、姿态误差、侧/深度漂移；阈值必须显式配置 |
-| test/test_tracking_guard.cpp | 验证错误符号/零误差、异常输入拒绝、FAULT 不自动恢复、FINISHED 不继续输出 | 后续补验证参考越界、超时、手动停止、不同控制器替换；不以单纯接口覆盖率为验收 |
+目标QoS为reliable/volatile，防止节点重启重放旧目标。目标是持续任务，header.stamp不用于过期检查；反馈Odometry仍必须满足时效要求。错误frame、非零z、非有限数、越界目标被拒绝并保留原任务；重复同一XY目标不重置轨迹。
 
-### 6.3 ROS 适配（保持算法核心独立）
+Path为显示消息，不包含完整速度/加速度；控制直接调用C++轨迹对象。planned_path/actual_path/home/accepted_goal保留最新消息供晚启动的RViz读取，诊断/显示名义10Hz；actual_path最多2000点。odometry_home的twist仍在B；当前真值零协方差直接保留，真机非零协方差需完整变换。
 
-| 文件 / 类 | 函数：输入 → 输出 | 内部状态与调用关系 |
-|---|---|---|
-| state_adapter.h/.cpp / StateAdapter | convert(odom,expected_frames)→RobotState 或错误；reset() | 检查 frame、时间戳递增、有限值、四元数范数；仅容许小数值误差归一化；转换 v_B→v_W。保存上一时间戳用于检测重置；接收时刻在节点保存 |
-| hippo_actuation_adapter.h/.cpp / HippoActuationAdapter | configure(gains,limits)→结果；reset(q_target)；compute(state,reference,progress_command,dt)→HippoEffortCommand；toMessages(command,stamp,base_frame)→两条 ActuatorSetpoint；notifySent(command) | 持有上游 GeometricController 和上一周期已发送 effort；设目标姿态/零角速度→Update→检查→限幅。notifySent 只在成功调用 publish 后更新记录，不代表执行器确认。构造时全部初始化 |
-| run_logger.h/.cpp / RunLogger | open(run_metadata)→结果；enqueue(StepRecord)→结果；flush()；close() | 有界队列和独立写文件线程；控制回调不做阻塞磁盘写入，禁止队列无限增长。记录落盘故障/丢记录计数；试验记录失效时结束本次实验 |
-| tracking_node.h/.cpp / TrackingNode | loadConfig()→经校验参数；onOdometry(msg)→最新状态快照；onStart()→服务响应；onStop()→响应；onResetFault()→响应；onControlTick()；onWatchdogTick()；onThrusterCommand(msg)；publishPreview()；stopOutput(reason) | 持有核心对象、轨迹、t0、最新状态及其 steady 接收时间、run_id、预分配 horizon。首版运行中禁止更改模型/控制参数；两个定时器和订阅在同一 executor 顺序执行 |
-| main.cpp | main(argc,argv)→初始化、创建节点、spin、清理返回码 | 不包含控制公式 |
-| test/test_state_adapter.cpp | 非单位/无效四元数、错误 frame、乱序时间；yaw=90° 时 body-x 速度应转成 world-y；消息转换/限幅/变化率的额外测试随适配批次加入 | 必须覆盖会改变真实控制方向的错误；不能只测恒等姿态 |
+## 5. 算法与中间量
 
-notifySent 的“成功”指 ROS publish 调用未报错，不能证明 mixer 或推进器已执行。onThrusterCommand 记录 mixer 的八路输出及其接收时间，不把不同序号异步消息强行宣称为同周期匹配。
+### 5.1 直线路径与五次时间轨迹
 
-### 6.4 节点控制流程与话题
+空旷凸活动盒中，p(s)=p0+d*s，d=(p1-p0)/L。两个端点在盒内才能建立路径；不包含地图、A*、RRT或障碍避让。
 
-本节为 C/D 的控制节点设计；B 批使用 §9 的独立只读预览节点，不提前创建执行适配器。
+令τ=t/T，h=10τ³−15τ⁴+6τ⁵：s=Lh，v=L/T*h'，a=L/T²*h''。时间取
+`T >= max(Tmin, 1.875*L/vmax, sqrt((10*sqrt(3)/3)*L/amax))`，启用jerk限制时再加对应项。参考从静止出发、以零速度/加速度结束。运动中换目标先制动，因此不将旧的非零参考速度硬拼到新轨迹。
 
-onStart：检查模式/状态/边界/参数 → 从当前有效位置和初始水平朝向构造目标 → plan → create → 固定 t0 → reset 控制器/执行适配器并进入 RUNNING。C/D 的 TrackingNode 承担控制，B 的 TrajectoryPreviewNode 单独承担只读显示。运动启动条件包括小速度、接近水平、参考路径方向可执行；失败只返回原因，不发送运动命令。
+### 5.2 纵向PD与航向
 
-onControlTick：读取同一快照 → Guard → 采样当前和未来参考 → projectProgress → compute → 姿态计算/命令限幅 → 发布两条命令 → notifySent → 记录完整 StepRecord。任何一环失败统一 stopOutput。
+实际进度s=d·(p−p0)，v_s=d·v_W。控制为
+`Fx = m*a_ref + d_surge*v_ref + kp*(s_ref−s) + kd*(v_ref−v_s)`。
 
-| ROS 接口（均相对 vehicle namespace） | 类型/语义 |
+当前名义m=2.31kg、d_surge=5.39N/(m/s)，kp=4N/m、kd=4.5N/(m/s)，均可配置，属于当前模型近似而非真机辨识。结构体缺省vmax=0.08m/s、amax=0.06m/s²；当前用户YAML为0.8m/s、0.6m/s²，Fx请求仍裁至±1.5N。配置加载成功不代表实际可达峰值速度；例如0.8m/s的名义阻力项约4.31N，已经超过1.5N限幅。
+
+路径左法向n=(-sinψ_path,cosψ_path)，横向误差e_y=n·(p−p_projected)。LOS航向修正为`clamp(-atan2(e_y,0.20),-0.6,0.6)`，即位于路径左侧时向右偏头。航向差大于0.3rad时冻结参考时间并制动。该策略围绕近对准工况实现，不提供横流/强扰动的稳定性保证。
+
+roll/pitch目标为0，yaw目标为路径航向加LOS修正。`M=Kp*[-roll,-pitch,wrap(yaw_des-yaw)]−Kd*omega_B`，然后逐轴限幅。wrap处理±π，身后目标可转向；节点拒绝大倾斜，避免将小倾斜欧拉反馈泛化成全姿态控制。默认Kp=[.035,.05,.10]，Kd=[.028,.06,.08]，力矩上限=[.006,.025,.025]N·m。
+
+### 5.3 原Hippo物理分配和死区逆映射
+
+令a=0.097/√2m，每台物理正推力f_i均定义为沿body+x。由力臂r×F及桨反作用力矩，
+
+```text
+[ Fx ]   [ 1     1     1     1   ] [f0]
+[ Mx ] = [-.01  +.01  -.01  +.01 ] [f1]
+[ My ]   [ a     a    -a    -a   ] [f2]
+[ Mz ]   [-a     a     a    -a   ] [f3]
+```
+
+固定满秩矩阵在构造时求逆；max_thruster_command配置电机限幅（缺省.4，归一化接口范围(0,1]），转换成单桨推力上限后四路同比缩小以保留wrench方向。上游单桨曲线为`F=max(0,.003313*n²+.1086*n−.8576)`，n=50*|油门|。解正根得到期望物理力所需油门；物理力趋近0时油门趋近约.13154的死区边缘，精确零力返回零。最后乘电机符号[-1,+1,-1,+1]，后4槽置零。发送端只检查有限值与归一化接口范围，不重复配置限幅。
+
+这是对已核验仿真曲线的静态逆映射，不修改原插件；未消除真实推进器滞后、换向、电压与水流影响。不要再把该输出交给normalized mixer。ROS端一条消息装8槽，外部bridge仍逐路转发Gazebo消息，不能称端到端原子执行。
+
+## 6. 文件、类与函数级调用
+
+路径相对`src/`；头文件在包的`include/<包名>/`，实现位于`src/`。
+
+| 文件 | 函数：输入 → 输出；内部状态/调用者 |
 |---|---|
-| odometry（订阅） | nav_msgs/Odometry；首轮真值来源，后续可用经适配估计状态 |
-| thrust_setpoint、torque_setpoint（发布） | ustrov_control_msgs/ActuatorSetpoint；body frame、全部轴显式赋值，ignore 全 false；Fy/Fz=0 |
-| thruster_command（只读订阅） | 记录 mixer 输出，不作为本节点额外发布入口 |
-| ~/planned_path、~/reference_pose（发布） | nav_msgs/Path、geometry_msgs/PoseStamped；显示/诊断，不回流为控制输入 |
-| ~/diagnostics（发布） | diagnostic_msgs/DiagnosticArray；状态年龄、运行状态、退出原因、记录丢失等 |
-| ~/start、~/stop、~/reset_fault（服务） | std_srvs/Trigger；start 为一次实验启用，不等同 PX4 arm |
+| core/types.h、result.h | 已有共享状态/限制/参考与显式错误；value只能在ok后读取 |
+| core/planning/line_path.h/.cpp | plan(PlanRequest)→LinePath；projectProgress(path,state)→ProgressState，无内部运行状态 |
+| core/planning/quintic_trajectory.h/.cpp | chooseDuration、create、sample、sampleHorizon；保存不可变路径和时间限制 |
+| core/tracking/planar_tracker.h/.cpp / HomeFrame | fromState→原点+初始yaw；toWorld/toHome做固定坐标转换 |
+| 同上 / PlanarTracker | validateConfig→Status；setConfig更新已校验参数但保留任务；setGoal校验后进入BRAKING；planFrom生成线段/轨迹；update(state,dt)推进阶段并输出物理请求；reset清任务计时/轨迹 |
+| core/tracking/hippo_allocator.h/.cpp | 构造保存B/B逆；forceFromThrottle/throttleFromForce对应单桨曲线；allocate(Fx,M)→AllocationOutput，无上一周期状态 |
+| ros/state_adapter.h/.cpp | convert检查frame/时间/有限值/单位四元数、旋转速度；保存上一有效时间戳；reset清历史 |
+| ros/point_tracking_node.h/.cpp | 创建算法对象；onOdometry丢弃坏帧/更新有效状态、首次建home；onGoal检查并启动任务；onTimer检查→update→allocate→sendMotors |
+| ros/point_tracking_parameters.cpp | loadConfig读取启动参数；readParameterValues更新候选副本；validateParameters检查候选；onParameters只校验，applyParameters在ROS提交后更新tracker/allocator；logConfig打印生效值 |
+| 同上 | checkGraph检查唯一电机发布者和无setpoint源；checkState检查时序/运动/空间；sendMotors边界复查后发布 |
+| 同上 | stopOutput立即归零+有限补发；onStop取消任务；onReset等待归零后清故障/状态，保留home；prepareShutdown正常退出共用归零路径 |
+| 同上 | publishHome发Pose和静态TF；publishDisplay降频发布参考/路径；publishDiagnostics发布状态/误差/控制/时序，阶段变化写终端 |
+| ros/tracking_main.cpp | init→单线程executor→正常信号置标志→prepareShutdown→有界spin→shutdown |
+| bringup/config/point_tracking.yaml | 增益、任务容差、空间/时效阈值、执行器限幅；ROS参数服务可更新，保存文件本身不触发更新 |
+| bringup/launch/hippo_point_tracking.launch | 世界+原版Hippo无mixer+point_tracking.launch；用户日常总入口 |
+| bringup/launch/point_tracking.launch | 自研节点+可选RViz，只可接无mixer的Hippo实例 |
+| bringup/rviz/point_tracking.rviz | 实际里程计、计划/实际路径、参考/目标，Fixed Frame=map |
 
-preview 模式不创建执行器发布者。sim_control 模式默认 IDLE，显式 start 后才控制；不是启动 launch 就自动运动。Odometry 采用兼容传感数据发布者的 QoS；命令与上游 SensorDataQoS 对齐，控制数据不使用可重放旧命令的 transient-local。
+### 6.1 参数和检查的职责（2026-10-06）
 
-到时限 t=T：采样终点，进入有限 settling 时间，仅继续纵向/姿态控制；沿线位置/速度满足容差且持续规定时间则 FINISHED，否则超时为失败。侧向/深度随时越界先触发 FAULT。完成、故障或 stop 时，两组命令各发一次零值，然后停止周期命令，不持续以零刷新下游看门狗。清除故障后仍回 IDLE。
+参考本地USTROV的`actuator_mixer_node_params.cpp`和`geometric_control_node_params.cpp`：模块使用配置限幅，控制增益可由参数回调更新。未修改上游，也没有移植PX4固件。
 
-当前 mixer 两个回调分别立即发布，**两组命令不具备原子性**，同一时间戳也不能改变这一点。首轮只用于受限仿真，需记录最终输出；多轴/真机前要另行设计同一周期控制分配与统一执行器消息。原有 mixer/PX4 看门狗保留，本节点的 guard 不能被宣称为经过验证的真机安全保护。
+- 参数入口：数组维度、有限值、正/非负范围、活动盒上下界与参数关系检查一次。删除0.2m/s、3N、0.1N·m及状态/深度参数共同≤1等试验上限。允许零增益关闭相应项。Status持有字符串，错误带参数名、数值和要求。
+- ROS参数事务：onParameters在config/limits副本上验证，无副作用；ROS提交后applyParameters更新实际对象。无新线程，无定时读YAML。增益、力/力矩及电机限幅下周期生效；已生成的五次轨迹保持原时间律，速度/加速度在下一段planFrom生效。home和任务进度不重置。
+- 实际运动监测：max_actual_speed_mps、max_tilt_rad、max_angular_speed_radps、max_depth_drift_m为0时关闭该项。启用实际速度检查时其阈值必须大于参考上限；时效参数必须为正。坐标接口为read_only，仿真期间use_sim_time保持true。
+- 消息入口：StateAdapter保留坐标、时间单调性、有限值和四元数检查。节点丢弃单帧错误，不刷新健康时间；超时、时间回退、多电机发布源仍停止归零。C1还保留全零基线确认、单通道和有限脉冲流程，这些属于试验本身的要求。
+- 算法：保留零路径、数值溢出、四元数、采样区间等数学检查以及制动/转向阶段条件。contains不再每周期重验边界配置；samplePulse不再每周期重验固定ProbeConfig。core的dt仅检查有限且>0，ROS配置max_ros_step_s负责调度容差。
+- 执行器：HippoAllocator维护由max_thruster_command算出的单桨最大推力，饱和同比缩放；sendMotors仅校验归一化接口。1是接口最大幅值，0.4是可改的默认值。归零、状态超时及下层看门狗不因本次整理取消。
+- C1/预览：删除额外写死的试验范围和订阅者/节点名门槛；配置仍在启动时固定，当前在线调参仅对到点节点开放。预览显示点数的资源上限、ROS时间戳可表示范围仍保留。
 
-### 6.5 配置与启动文件
+回归验证覆盖高于旧门槛的配置、事务回滚、热改限幅、当前轨迹连续性、单帧错误/持续丢失、真实多源冲突及停止归零；Gazebo结果和具体命令统一记入README，不将接口假状态测试当成动力学验证。
+| core/test/test_planar_tracking.cpp | 坐标、独立力矩平衡、曲线逆映射/限幅、身后目标、换目标、保持、LOS与时间边界 |
+| ros/test/test_point_tracking.cpp | 人工状态/clock+假bridge；目标、无任务无输出、stop、暂停锁存、复位不重启、多源冲突 |
 
-| 文件 | 内容与边界 |
-|---|---|
-| config/line_demo.yaml | 相对目标位移、v/a/可选 jerk、空间边界、方向/起速条件、误差容限、settling 超时；空间和容限在运行前结合模型核验，不把真机池尺寸直接套到 Gazebo |
-| config/hippo_sim.yaml | frame、namespace、模式、period、状态年龄阈值、PD/姿态增益、normalized effort/变化率限制；不存相机内参或实机推进器参数 |
-| launch/hippo_sim.launch | B：XML 入口，include 外部 USTROV top_hippocampus_complete.launch.py，传 vehicle_name/use_sim_time/start_gui；只启动一套仿真与 mixer |
-| launch/trajectory_preview.launch | B：只启动 trajectory_preview_node 与可选 RViz，订阅已有仿真状态；不启动 Gazebo/mixer |
-| launch/hippo_preview.launch | B：组合以上两个 .launch，供首次一键启动；已有 Hippo 时只用前一行的预览入口 |
-| launch/hippo_line_tracking.launch | 连接已有仿真，启动一个 own tracking_node；复用计算库，不额外启动姿态节点/mixer；use_sim_time=true，初始 IDLE |
-| 父级 .gitmodules + USTROV gitlink | 固定 USTROV 版本；采用用户已建立的 Git 子模块，不另建 dependencies.repos |
+core/ros均为现有包内新增文件；CMake安装节点并登记正式测试，ROS包新增tf2_ros依赖。没有新增空包或将每个算法类拆成ROS节点。
 
-预览没有控制输出；后续闭环必须确认控制命令来源唯一，不能重复启动跟踪节点或 mixer。构建依赖：ROS 2 + USTROV 安装环境 → ROV_Control overlay；自己的实现只维护一个权威源码目录，WSL 构建从该来源产生，不能同时维护 Windows/WSL 两份独立编辑版本。
+## 7. 扩展与真机迁移
 
-## 7. 后续扩展与真机迁移
+- MPC：保留home、状态适配、路径/轨迹、执行分配和运行检查；先将update中的纵向物理力公式独立为可替换策略，再做离散模型、预测矩阵、QP/OSQP及失败回退。此时再冻结接口，不提前放空实现。
+- 多航点：目前逐个发布目标，运动中可替换；连续曲线/非零端速的多段拼接尚未实现。
+- 真机：另做状态与执行器适配，核验FLU/FRD、ENU/NED、速度所属坐标、深度符号、时间、有效性、实际分配矩阵与推力标定、Pi周期及PX4权限/看门狗。命名空间只能隔离话题名，不能完成这些迁移。
+- home：真实上电时刻若要跨控制节点重启保留，需要由独立定位/任务管理层建立并保存，当前原点属于单次节点生命周期。
+- 视觉：实机下视AprilTag定位结果经标定、融合、时效/失效检查后进入状态适配；不将图像直接塞入当前跟踪器。
 
-### 多航点/曲线
+## 8. 验证与当前完成范围
 
-纵向直线通过后，再设计水平弧线和多航点：路径应含切向/曲率，时间分配需同时限制向心加速度 v²κ 和转向速度。直线接直线的尖角不能以非零速度硬通过；选择停点转向或连续曲线需结合机动能力。届时新增曲线路径/制导函数，并升级受控自由度，不能复用首版标量控制器就称为平面位置跟踪。
+已完成纯数学、ROS接口以及原Hippo实际Gazebo闭环三层验证。验收覆盖前进、斜向、身后目标、返回原点、运动中换目标、错误目标保留任务、停止/暂停归零与复位不自动重启；正式测试和数值结果统一维护在README §10，避免重复两份数字。
 
-水平/空间轨迹阶段，先解决侧向误差如何通过航向/俯仰与前向推力间接纠正、浮力与深度如何协调、控制输入约束和可实现终点状态。真实四推进器几何将决定是否继续使用这种欠驱动结构。八推进器版本需重新验证分配矩阵秩、条件数、饱和可达集合和模型；不只是改数组长度。
-
-### 真机
-
-1. 保留 C++ 几何规划、时间采样和合适的控制算法；在 Pi 4B 上重新构建并测周期耗时。
-2. 用实际 IMU/深度/DVL/后续视觉形成可用状态，经 StateAdapter 输出统一格式；没有可信位置观测时不开展真机绝对位置闭环。
-3. HippoActuationAdapter 是仿真专用边界。真机要按实际布局、推力曲线、坐标和归一化规则实现硬件适配，结合 PX4 direct_actuator 验证。Pi 仍承担所需控制环，不能默认 PX4 自动给出姿态内环。
-4. 真机配置、时间源、ROS 版本、传感质量、保护条件与使能流程逐项核验；命名空间/remap 只解决连接命名。
-5. 视觉在真实设备上先采集/标定/离线或只读估计，再小范围闭环。仿真可用状态噪声、延迟、丢包故障注入检查控制接口，这不要求仿真真实水下图像。独立评价真值与反馈来源区分。
-
-## 8. 分批实现与验收
-
-| 批次 | 先解释/再实现 | 验收 |
-|---|---|---|
-| A（已完成） | 数据类型、边界、直线路径、五次时间律 + C++ 核心测试 | 2026-09-29 独立 CMake 与 ament/colcon 构建测试通过，21 个 GTest 全通过；教学讲解见 ../README.md；尚不据此判断用户已经掌握 |
-| B（已完成） | ROS 状态适配与轨迹预览，只连读状态 | 2026-10-02 新增 14 个 C++ 测试通过；Hippo 默认/改名实例、参考、暂停/故障、复位、rosbag 验证完成；世界时间重置后的上游状态恢复限制见 README §7 |
-| C | 小输入方向核验、姿态库封装、PD、限幅、日志与运行状态机 | 唯一命令源、符号正确、沿线响应可解释；暂停/过期/越界停止有效；记录完整 |
-| D | 受限短直线 PD 跟踪 | 报告沿线误差、横向/深度漂移、饱和占比、周期耗时与退出原因，不把投影误差冒充全空间误差 |
-| E | 模型辨识/核验 → MPC 数学与 QP/OSQP → 数值再 Gazebo | 同参考/初始条件/限幅与 PD 比较；记录求解失败、超期、预测误差 |
-| F | 可实现转弯、侧向/深度控制、多航点 | 新受控自由度逐步通过；未满足时不追加复杂规划器掩盖控制缺口 |
-| G | Pi/实际布局适配、状态估计、后续真实视觉闭环 | 按设备与观测条件分级验证，保留桥原有保护；不是改 namespace 后直接下水 |
-
-2026-09-29 用户确认并完成 A 批；09-30 细化 B 批设计并清理重复文档；10-02 用户确认 B 批后完成实现与接线验证。B 是闭环前的状态/时序验收；C/D 才让控制输出影响仿真。首轮数值示例不冻结真机参数。沿用用户已建立的 Control_Sys_AUV 主仓库和 USTROV 子模块，本次没有自动提交。
-
+该结果属于无外加水流、真值反馈、原模型的水平基线。未验证避障、长期横流、传感器融合、PX4 HIL或真机性能。pool.xacro无池壁碰撞体，活动盒只约束中心点。暂停世界恢复可显式复位，重置世界仍建议重启完整launch。
 
 ## 9. B 批：Hippo 状态接入与轨迹预览的具体设计
 
@@ -356,7 +225,7 @@ Hippo 真值 → fake_state_estimator → /uuv00/odometry
 | StateAdapter::reset() | 无 → 清除时间历史 | 用于显式故障复位/仿真新时间段；不改变 frame 约定 |
 | trajectory_preview_node.h + src/trajectory_preview_node.cpp / TrajectoryPreviewNode(options) | NodeOptions → ROS 节点 | 调 loadConfig；创建适配器、订阅、显示发布者、服务、wall timer；初始 WAIT_STATE |
 | loadConfig() | 已声明的 ROS 参数 → 经校验 PreviewConfig | 检查数组长度、有限值、正周期/限制、有效边界、非空 frame、显示点数；非法则拒绝节点初始化，不静默换默认 |
-| onOdometry(msg) | 一条消息 → 更新有效快照或置 FAULT | 调 convert；成功保存状态与 steady 接收时间；坏数据使状态失效，活动预览停止；不得沿用旧状态伪装新消息 |
+| onOdometry(msg) | 一条消息 → 更新有效快照或丢弃该帧 | 调 convert；成功保存状态与 steady 接收时间；坏帧不刷新有效接收时间，持续无有效数据才超时停止 |
 | isStateFresh(nowRos, nowSteady) | 两种当前时间 → Status | 检查有状态、ROS 时间年龄、明显未来时间、wall 接收间隔；只读检查，用于 start 和 timer |
 | createTrajectory(state, config)（命名空间纯函数） | 当前有效状态＋配置 → Result<QuinticTrajectory> | 水平投影 q_WB*[1,0,0] 并归一化为 d；p_goal=p_current+length*d；调用 A 批 plan/create；水平朝向近零时拒绝；无持久状态 |
 | onStart(request, response) | Trigger → 成功/拒绝原因 | 只在 READY/FINISHED 且状态有效时调用 createTrajectory；固定 t0、保存轨迹、发布完整 Path 后进入 PREVIEW；FAULT 必须先 reset_fault |
@@ -423,7 +292,7 @@ createTrajectory 和 makePathMessage 在同一节点头文件中声明为命名�
 5. 预览节点在执行器话题没有发布者端点，排除把“无位置变化”误当作无命令证据。
 6. rosbag 可读到原始 odometry、参考 Pose 和诊断；记录明确为预览验收，不写“闭环跟踪成功”。
 
-之后进入 C/D：先逐通道核对小输入的方向与零命令/超时行为，再接已讲解的纵向 PD、上游姿态计算库、命令限幅、运行状态机和周期日志。首轮报告沿线误差、速度、横向/深度漂移、命令饱和、周期耗时与退出原因；以这些证据确认 SIL 闭环是否成立。
+后续 C1 的方向/死区核验已完成，见 §11；当前水平闭环见 §1–8。实现采用自己的物理姿态 PD 与推力分配，没有接入原拟议的上游姿态库封装。
 
 ## 10. 合并保留的环境、算法细节与维护约定
 
@@ -453,3 +322,276 @@ createTrajectory 和 makePathMessage 在同一节点头文件中声明为命名�
 自研包使用 rov_ 前缀，依赖方向为 ROV_Control → USTROV。2026-10-02 用户已将两者放入 Control_Sys_AUV 主仓库，USTROV 为固定 commit 的 Git 子模块；沿用这一组织，不再另加重复的版本清单。必要的上游修复独立维护，本次无上游修改。仿真子集不需 PX4 underlay，完整硬件工程再按依赖加载。保留一份自研源码，通过 WSL /mnt/c/DeskFiles/MPC-Mamba/Control_Sys_AUV/ROV_Control 构建，不另建会分叉的编辑副本。主仓库 AGENTS.md 按用户要求暂时忽略；正式 C++ 单元测试源码继续受版本管理。
 
 文件约定：README 放当前可执行步骤与结果；本文件维护设计和下一批接口；MPC_LEARNING_ROADMAP 保留理论/选型。根目录规则、证据和决策分别维护。删除重复过程稿前迁移有效信息并修复链接；不新增仅复述进展的日报/批次 .md。
+
+## 11. C1：执行通路、死区和方向核验（2026-10-03，已确认并实现）
+
+### 11.1 源码证据与实施顺序
+
+先核读本地固定版本的 mixer、消息、GeometricController、generic 推进器模型及 Hippo 引用关系，用户确认后实现并进行输入试验：
+
+1. Hippo 的 `hippocampus_normalized_default.yaml` 输入为 `[Mx,My,Mz,Fx,Fy,Fz]`；单个有效通道对每台推进器的系数绝对值为 0.25，Fy/Fz 列为零。此配置的推力到转速转换为恒等映射；未饱和时单通道 effort=u，对应电机命令绝对值 0.25|u|。
+2. generic 推进器最大转速 3000 rpm=50 rev/s，先计算 `F(n)=0.003313*n*n+0.1086*n-0.8576`，再将负值裁成零。正根约 6.57718 rev/s，因此非零稳态推力要求电机命令超过约 0.13154，对应单通道 effort 超过约 0.52617。
+3. 上述阈值是源码推导，条件为仅一个通道非零、其余清零、当前模型及混控配置。C1 已核对运行参数：effort=0.4 时四台推进器报告推力均为零；|effort|=0.6 时峰值各约 0.14325625 N，与公式一致。这是两个幅值点的验证，没有用密集扫描测定精确阈值；不外推到多轴叠加或真实设备。
+4. `SimpleMixer::ApplyInput()` 没有使用配置中的 `input_limits` 做逐通道限幅；`GeometricController::Update()` 也没有限幅。自己的发送边界必须校验命令，不能只看配置名或头文件说明。
+
+因此先比较零输入、阈值以下输入、刚超过阈值的正反输入，再选 PD 增益。保持上游模型和混控不变，不通过删掉常数项或改混控系数掩盖死区。
+
+### 11.2 系统目标与复用范围
+
+C1 新增一个 C++ 节点，发送有限时长的单通道脉冲，记录实际运动、命令与 mixer 输出，验证方向和停止行为。它是执行通路试验，尚无参考误差反馈控制。
+
+- 复用 StateAdapter、RobotState/Result、Hippo 仿真和唯一 mixer；原预览入口保留，不借预览 start 使能控制。
+- 本批不接 PD、姿态保持、MPC、真实估计器、PX4 或相机。姿态/位置反馈用于监测和终止试验，不用于持续稳定控制。
+- 只选 surge/roll/pitch/yaw 中一个非零通道，其他通道与 Fy/Fz 显式置零。每次 start 只执行一次配置好的脉冲，不自动遍历所有轴。
+- 当前水平闭环复用 C1 的方向证据，另建物理力/力矩分配入口，不复用 normalized effort 消息封装；probe 保持独立试验职责。
+
+### 11.3 数据流、时间和消息语义
+
+```text
+actuation_probe.yaml + XML 参数 → loadConfig → 固定 ProbeConfig
+odometry → StateAdapter::convert → latestState_ + steady 接收时刻
+  → 检查状态/命令来源 → READY → start → 保存起始状态与 t0
+
+wall timer（名义20 ms）→ 时效/时钟/边界/相对运动检查
+  → ROS 时间前进时 samplePulse(elapsed, config)
+  → HippoEffortCommand（无量纲）→ makeActuatorMessages
+  → thrust_setpoint + torque_setpoint → 唯一 mixer
+  → thruster_command → static_bridge → Gazebo → 新 odometry
+
+thruster_command → onThrusterCommand → 缓存输出和接收时间
+阶段、配置、时效、故障 → diagnostics
+rosbag2 → /clock、odometry、两类 setpoint、thruster_command、diagnostics
+```
+
+两条 ActuatorSetpoint 的 ignore_x/y/z 都为 false，所有字段显式赋值，防止保留旧缓存。两次 publish 不是原子操作：第一条可能与上一周期另一类输入组合；先在基线期发完整零组合、观察 mixer 回零，记录中保留实际混控输出。thruster_command 是发送的电机命令，不是执行确认或测得推力；方向验收依据实际状态变化。
+
+脉冲进度使用 ROS 时间；wall timer 在暂停时继续检查。ROS 时间不前进时不继续发非零命令，接收超时进入锁存 FAULT，并由 wall timer 有限次补发全零。上游 watchdog 使用 ROS 时间，仿真暂停时不能依赖其计时。
+
+### 11.4 数据结构和内部状态
+
+这些类型放在下述两个 ROS 头文件中，不给数学核心增加 ROS 依赖：
+
+| 类型/成员 | 内容 |
+|---|---|
+| HippoEffortCommand | surge_effort、torque_effort_B；四个无量纲命令，默认全零 |
+| ProbeConfig | frame、通道、幅值、基线/上升/保持/下降/观察时间、幅值上限、工作空间、时效/位移/转角/速度阈值 |
+| ActuatorMessagePair | thrust/torque 两条消息，共用时间戳和机体系 frame；不表示同步送达 |
+| ProbeTiming | ROS 时间增量、状态 ROS 年龄、steady 接收间隔/时钟停顿时长、时钟倒退标志，由节点计算 |
+| ProbeStatus | WAIT_STATE、READY、RUNNING、FINISHED、FAULT；RUNNING 内含基线、脉冲、零输入观察阶段 |
+| 节点成员 | latestState_、startState_、t0_、lastRosTime_、lastReceiveSteady_、最近 mixer 输出/接收时刻、有限零补发截止时间、试验序号、阶段/原因 |
+
+WAIT_STATE→READY→显式 start→RUNNING→FINISHED。FINISHED 仅表示输入试验结束。FAULT 锁存，新的有效状态不能自动恢复；reset_fault 清旧状态和时间历史后重新等待消息，不自动 start。
+
+### 11.5 文件、类和函数级接口
+
+以下接口已实现；C++17、详细中文注释、.h/.cpp、两空格 Allman。头文件位于 `rov_control_ros/include/rov_control_ros/`，实现位于该包 `src/`。
+
+| 文件/类 | 函数：输入 → 输出 | 内部状态、调用关系 |
+|---|---|---|
+| hippo_command.h/.cpp | validateProbeConfig(config)→Status | 纯函数：通道、有限值、时间、幅值、空间、阈值检查；loadConfig 调用 |
+| 同上 | samplePulse(elapsed,config)→Result<HippoEffortCommand> | 纯函数：基线零→线性上升→保持→线性下降→零观察；仅填所选通道，结束后始终零；负/非有限时间拒绝 |
+| 同上 | makeActuatorMessages(command,stamp,bodyFrame,limit)→Result<ActuatorMessagePair> | 纯函数：检查有限值/frame/幅值；完整赋值；越限拒绝，避免悄悄改变试验幅值；正常输出/归零共用 |
+| 同上 | checkProbeState(state,startState,timing,config)→Status | 纯函数：检查时效、时间、边界、相对位移/转角、速度；q/-q 等价，不用欧拉角直接相减处理跨 ±π |
+| actuation_probe_node.h/.cpp / ActuationProbeNode | 构造函数、loadConfig() | 读取并固定配置；要求 use_sim_time=true；创建适配器、订阅/发布、Trigger 服务、wall timer，拒绝运行中改参数 |
+| 同上 | checkCommandSources()→Status | 检测setpoint/电机话题实际多发布者冲突；不依赖固定mixer名称或订阅数。基线收到全零电机反馈才允许脉冲。图发现有延迟，此检查不是分布式互斥锁 |
+| 同上 | onOdometry(msg) | convert 成功才更新快照/接收时间；单帧非法输入丢弃并限频告警，持续无有效状态才由定时器超时归零；FAULT 等显式复位 |
+| 同上 | onThrusterCommand(msg) | 保存 mixer 输出和接收时刻，检查有限值/范围；不把输出称为实际推力 |
+| 同上 | onStart(request,response) | 仅 READY/FINISHED 且零补发已结束；检查时效、起速、倾斜、唯一命令源；保存初态/t0/试验序号，进入全零基线 |
+| 同上 | onTimer() | 检查状态/时钟/图→有新 ROS 时间时采样并发送；基线期确认 mixer 回零；结束归零；FAULT 时仅有限零补发及诊断 |
+| 同上 | publishCommand(command,stamp)→Status | 封装并发布两类消息，记录发送值/时间；publish 不表示送达确认；异常结束试验 |
+| 同上 | stopOutput(nextStatus,reason) | 放弃非零序列，立即发全零并启动有限 wall 补发，保存原因；故障归零跳过正常脉冲下降段 |
+| 同上 | onStop(request,response)、onResetFault(request,response) | stop 调 stopOutput，不能解除 FAULT；reset 等零补发结束后清状态/时间、adapter.reset，回 WAIT_STATE |
+| 同上 | publishDiagnostics() | 阶段变化即时、常态降频发布配置/命令/时效/相对运动/原因；rosbag 保留原始话题，不用字符串诊断替代原始状态 |
+| probe_main.cpp | main(argc,argv) | init→单线程 spin→正常退出前尽力归零→shutdown；被强杀不能保证退出处理会执行 |
+| test/test_hippo_command.cpp | C++ 计算/消息测试 | 已知时间的脉冲值、不同轴、结束全零、ignore 标志、NaN/越限、q/-q、运动/时间异常 |
+| test/test_actuation_probe.cpp | C++ ROS 接口测试 | 未 start 无非零输出、有限时长、停止/暂停/过期/坏状态/多源、故障锁存、复位不重启 |
+| rov_bringup/launch/actuation_probe.launch | XML：已有仿真时仅启动 probe | 参数 vehicle_name、channel、amplitude、config_file；节点名 actuation_probe，无额外 mixer/姿态节点 |
+| rov_bringup/launch/hippo_actuation_probe.launch | XML：include hippo_sim + actuation_probe | 一套仿真和 probe；start_gui 可选；原 B 入口保留 |
+| rov_bringup/config/actuation_probe.yaml | 配置初始试验/监测参数 | 只含仿真值，说明每个阈值用途，不写真实设备标定 |
+
+已修改 ROS 包 CMakeLists/package.xml，增加支持库、程序、测试和 ustrov_control_msgs 依赖；C1 不链接姿态控制库。bringup 安装新配置/launch。继续使用 build/batch_b、install-b，目录名不限制新增内容。实际可执行步骤、逐条命令解释及失败记录集中在 README §9。
+
+### 11.6 当前参数与验证方法
+
+以下是经过有限输入试验修订的仿真配置，不是 PD/MPC 增益或真机标定：
+
+- 单次一个通道：先 0，再 0.4；surge/roll/pitch 使用 ±0.6，yaw 使用 ±0.55；默认effort_limit为0.65，可在YAML配置至归一化接口边界1。上述数值是原试验记录，不自动递增到最大命令。
+- ROS 时间：全零基线 1 s，上升 0.1 s、保持 0.1 s、下降 0.1 s，随后全零观察 1 s，总计 2.3 s。初次候选保持 0.3 s 导致 pitch/yaw 角速度超限，故缩短；yaw 短脉冲 ±0.6 仍触发转角保护，故降低该轴幅值。保护阈值未放宽；故障/手动停止立即归零。
+- wall 周期候选 20 ms；状态 ROS 年龄上限 0.10 s、steady 接收间隔 0.15 s、未来容差 0.05 s、单次正 ROS 增量上限 0.10 s。启动需看到时钟前进；故障零补发 0.5 s wall 后停止发送。接通时根据实测校验阈值，变更说明原因并记录。
+- 起始线速度 <0.03 m/s、角速度 <0.10 rad/s、倾斜 <5°；活动期间相对位移 <0.10 m、相对转角 <10°、线速度 <0.20 m/s、角速度 <0.50 rad/s，并位于明确配置的活动盒。浮力导致条件不满足时等待或终止，不能将漂移直接归因于脉冲。
+- 正/反输入从满足启动条件的状态开始，必要时重启整套场景；记录基线漂移和沿初始机头的速度/位移、机体系角速度。只有 mixer 消息不计为运动方向通过。
+- 测试前核对实际 mixer 参数和加载模型，与源码推导对应；试验期间不热改 mixer。ROS 图检查不能证明混控参数相同。
+
+验证顺序：
+
+1. 构建、C++ 数学/消息/接口测试；先证明无 start 无非零输出、脉冲必结束、错误归零。
+2. 独立仿真实例中确认唯一命令源和模型/参数；零输入验证通路与记录。
+3. 先 surge，再 roll/pitch/yaw，分别比较 0.4 和 ±0.6 的有限脉冲；监测超限即终止并保留失败记录。
+4. 验证 stop、暂停、状态中断、时间倒退、错误 frame、多命令源。零命令后惯性/浮力运动仍可能存在，不能以位置立即静止作为归零判据。
+5. rosbag 保存 /clock、odometry、两类 setpoint、thruster_command、probe diagnostics，逐次新建忽略的 log 子目录；正式 C++ 测试源码保留。
+6. 交付讲解：改动文件→每周期数据流→构建/测试/启动/服务/记录命令及每个参数含义→实测结果和边界。未实施命令不写成已经可运行。
+
+C1 没有加入死区补偿；后续水平闭环已按 §5.3 对原模型做静态曲线逆映射，并通过实际 Gazebo 验证。它不等于真实推进器标定。MPC 仍需建模实际输入/响应关系；真机需独立状态/执行适配和看门狗。
+
+## 12. 真机迁移与透明水缸视觉方案（视觉未实施；10-07逐电机工具见§12.10）
+
+### 12.1 系统目标与已知条件
+
+先实现真实传感器驱动的小范围水平闭环：发布相对本次任务 home 的 XY 目标，由视觉、IMU、深度提供有效状态，在实际控制权限允许时沿用当前路径/时间律/跟踪思想。视觉直接使用真实水缸成像链，不增加视觉仿真前置条件。第一批仅定位与数据记录，不启用推进器。MPC仍未实现，不把换状态来源称为完成MPC。
+
+用户确认：Pi 4B、Pixhawk 6C、Ubuntu 24.04对应ROS 2（按Jazzy规划，未读取设备）、深度计接Pixhawk、无DVL。四推进器在侧面且与Hippo相近；未有精确几何和推力曲线。已有HSK USB单目相机，传图正常；用户提供商品规格为500万IMX335、2.8mm、120°、“无畸变”、IP66、2m线，真实投影模型/近焦/帧率/浸水能力未核验，不再直接断言是鱼眼。透明水缸1.5×0.5×0.8m，暂按长宽高，内/外尺寸和实际水深未知；尺寸限制见§12.8。用户现已选择相机固定在ROV上，按下视/缸底标签设计。
+
+### 12.2 当前代码能复用到哪一步
+
+| 模块 | 已有事实 | 迁移工作 |
+|---|---|---|
+| LinePathPlanner / QuinticTrajectory / HomeFrame | C++几何、时间律、软件原点已完成 | 保留算法，重设实际空间与运动限制；home只在定位有效后建立 |
+| PlanarTracker | 前向力、姿态力矩，横向误差通过转向修正 | 用真实质量/阻尼/增益；核验需要的Fx/Mx/My/Mz是否可达，不能用四电机数量替代能力检查 |
+| HippoAllocator | 固定Hippo安装几何、反作用力矩与推力曲线 | 真机另做可配置分配，实测方向/力臂/曲线/饱和，原仿真类保留 |
+| PointTrackingNode | 当前loadConfig强制use_sim_time=true，状态来自仿真Odometry | 不删除保护来冒充迁移；另建真机入口，复用计算层，补定位健康和解锁握手 |
+| USTROV PX4 bridge | ActuatorControls→ActuatorMotors，显式arm/stop、prestream、命令超时、通道映射，direct_actuator=true | 校验固件/px4_msgs、实际PWM输出功能、可逆ESC和未装通道；避免叠加两次电机符号 |
+| USTROV sensor bridge | SensorCombined FRD→FLU；SensorBaro压力转发；启动时估计时间偏移 | 确认外部水压计驱动/实例/device_id和时间对齐，现有代码未按device_id筛选 |
+| USTROV C++ EKF | SetImuData/SetBaroData/SetVisionData及融合代码和可链接ekf库 | 先回放审核，再包装统一Odometry；补同一时刻的状态/协方差及健康契约 |
+| Hippo visual_localization | 上游AprilTag36h11，Python视觉EKF、C++PX4 bridge；本地无该包 | 借鉴标签地图与外参变换，采用C++检测/几何；不原样复制Python滤波和桥 |
+
+证据范围：USTROV core README记载Armed/Offboard与停止命令后约318ms上锁，本轮仅阅读，未现场复测。Gazebo已有结果是真值闭环。`Estimator::PublishPose()`协方差仍为零占位，`OnImuWatchdog()`复位TODO、`UpdateDeadreckoningStatus()`空实现；不能凭节点有输出就认定定位健康。`PublishState()`取延迟融合状态而打当前IMU时间，不能与当前速度/姿态任意拼接。
+
+当前本地point_tracking.yaml已含速度0.8m/s和加速度0.6m/s²等用户调参，全部仍为仿真配置；真机不直接加载。参数已支持部分运行时更新，不能继续沿用早先“一律不支持热改”的描述。
+
+### 12.3 两种相机布置与建议
+
+| 项目 | 机载下视，缸底固定标签 | 缸外固定，机器人携带标签 |
+|---|---|---|
+| 必须固定的几何 | 各标签在map中的位置/方向；相机到机体外参 | 相机在map中的外参；标签板到机体外参 |
+| 工程代价 | 相机防水窗口、安装/线缆；近底视场和可见标签覆盖 | 刚性支架，隔缸壁标定；机体转动时避免标签被遮挡 |
+| 对当前USB相机 | 需确认防水；完整湿光路标定 | 可先不改防水，验证定位；仍存在空气/玻璃/水折射 |
+| 迁移价值 | 接近后续机载定位，限于有标签覆盖区域 | 适合室内控制试验，依赖外部设施/通信 |
+
+2026-10-06用户已选择机载相机，替代此前缸外优先的试验建议。后续围绕刚性下视安装、最终防水窗口、缸底已知标签地图开展只读定位验收。缸外布置仅保留为比较资料，不是当前首阶段任务。用于反馈的同一视觉输出不算独立真值。
+
+### 12.4 相机模型、标签与坐标契约
+
+1. 先核相机输出是原始图还是内部矫正图，固定分辨率/焦距/曝光，保持Image与CameraInfo一致。“120°/无畸变”不是镜头模型证明；按标定和独立误差检验选择针孔加畸变或fisheye模型。若采用fisheye，先生成合适视场的虚拟针孔图，再检测/PnP；虚拟K与零畸变供后级使用，不能将原鱼眼D套给普通针孔PnP。去畸变映射表初始化时缓存。
+2. 默认候选AprilTag36h11以对齐Hippo，若用户已印ArUco则配置正确字典；不能混用图案和字典。测量实际标签边长，固定到平整、防水、哑光硬板。多标签几何可提高覆盖与冗余，但不是免除平面位姿歧义/折射的保证。
+3. 确认最终空气/窗口/水光路后湿标定，并用不同位置/高度/姿态的已知位移独立验证。鱼眼畸变校正不能消除平面窗口折射；若近似模型在所需区域失败，先缩小视场/工作区域或进一步采用折射模型，不能调控制增益掩盖系统定位偏差。
+4. 坐标约定：W为水缸固定map、Z向上（建议水面为z=0，缸底为-H），B为机体FLU，C为光学系右/下/前。T_AB将B坐标变换到A。
+
+机载：已知T_WM和T_BC，图像得到T_CM，计算 `T_WB=T_WM*inverse(T_CM)*inverse(T_BC)`。
+
+缸外：已知T_WC和T_BM，图像得到T_CM，计算 `T_WB=T_WC*T_CM*inverse(T_BM)`。
+
+单目尺度来自实测标签尺寸/地图。home再由有效T_WB固定建立；不把相机原点、标签原点和home混为一谈。深度零点与map的高度基准对齐，补压力传感器相对base_link的杆臂；只改frame字符串无效。
+
+### 12.5 规划中的数据流与时序
+
+~~~text
+相机Image + CameraInfo → 按实际镜头模型校正 → 标签检测/已知几何PnP → 质量门控
+    → vision_pose(map中的base_link，采集时刻、协方差) + 视觉健康
+Pixhawk IMU → USTROV sensor bridge → imu(FLU、rad/s、m/s²)
+已确认的水压实例 → pressure(Pa) → 水面零点/杆臂 → 深度约束
+    → C++融合状态（候选复用USTROV ekf，经回放审核）
+    → Odometry + StateHealth → StateAdapter → RobotState
+goal(home) → LinePathPlanner → QuinticTrajectory → PlanarTracker
+    → 物理力/力矩请求 → 真机分配/曲线 → 执行许可与限幅
+    → 唯一thruster_command → USTROV actuator bridge → DDS → PX4 → ESC
+~~~
+
+所有传感器输入、观测/拒绝原因、状态健康、参考、物理请求、分配后可达力、归一化指令、PX4状态及延迟记录到rosbag。相机处理独立进程，最新帧优先、队列有界；状态节点按IMU采样时间预测，观测按采集时间融合，控制节点定时计算。初始目标视觉约20Hz、控制50Hz，均需Pi实测P95/最坏延迟再定；频率是目标不是已达到的结果。
+
+真机use_sim_time=false；控制dt用单调时钟，观测保留源时间并统一时间基准。缸外PC相机与Pi分机时须核验时钟同步和网络延迟；同机处理也不能以处理结束时间冒充曝光时间。视觉丢失时允许估计器短时预测，但StateHealth必须降级并由控制停止；不得不断重打时间戳把旧观测伪装成新定位。
+
+### 12.6 暂定文件与函数级接口（均未创建）
+
+自研C++遵循现有.h/.cpp中文注释风格。新增一个`rov_localization`包隔离OpenCV/相机依赖；控制数学仍在core，运行入口在ros，配置启动在bringup。以下每个.h/.cpp成对，main仅init/spin/shutdown。
+
+| 文件/类 | 函数与输入→输出 | 内部状态与调用关系 |
+|---|---|---|
+| localization/camera_geometry.h/.cpp，CameraGeometry | configure(CameraInfo,输出视场)→校正配置；rectify(Image)→图像和虚拟K | 保存标定版本/校正映射；标定或分辨率变化使旧结果失效 |
+| localization/fiducial_localizer.h/.cpp，FiducialLocalizer | loadGeometry(标签尺寸/地图或机体标签外参)；detect(图像)→ID/角点；estimateBodyPose(角点,K,外参)→PoseObservation；checkQuality(观测)→通过/原因 | 保存固定几何和上一有效观测；PnP正深度、重投影、跳变/歧义检查；拒绝帧不能刷新last_valid |
+| localization/fiducial_localization_node.h/.cpp | onCameraInfo缓存模型；onImage→rectify/detect/estimate/check→publishPose/publishHealth | 相机回调为唯一视觉状态写入者；只发观测，不做二次惯导融合 |
+| localization/real_state_node.h/.cpp，RealStateNode | onImu→SetImuData/Update；onPressure→校零/SetBaroData；onVision→门控/SetVisionData；makeOdometry→统一时刻的p/q/v/omega；evaluateHealth；reset | 候选持有已有Ekf库；保存源时间、初始标定、有效观测年龄/质量。输出v_B=R_WBᵀv_W，omega_B使用时间对齐且正确去偏的IMU |
+| core/tracking/thruster_allocator.h/.cpp，ThrusterAllocator | configure(r_i,d_i,曲线,限幅)→秩/可达轴报告；allocate(物理力旋量)→各电机N/指令/实际可达力及残差 | 几何与标定持久化；未装通道明确处理；饱和后必须报告实际可达量，不把请求冒充输出 |
+| ros/hardware_tracking_node.h/.cpp，HardwareTrackingNode | onOdometry/onHealth缓存；onGoal→setGoal；onEnable请求零预流与bridge arm；onPx4Status确认模式；onTimer→health→tracker→allocator→publish；onStop归零/请求上锁 | 独立真机任务/执行许可状态；单线程executor序列化。唯一thruster_command发布者，未ARMED+Offboard/定位有效前只允许零预流；重连不自动续跑 |
+| bringup/config/{camera,tank_tags,camera_extrinsics,real_vehicle,real_tracking}.yaml | 相机模型、标签几何、外参、真实推进器/控制配置 | 记录测量来源/单位；实测配置与Hippo配置分开，不提前填假标定 |
+| bringup/launch/{real_sensors,vision_localization,real_state_preview,real_point_tracking}.launch | 纯XML：只读传感器→视觉→状态预览→真机控制逐级启动 | 首批只实现到只读定位；真机控制入口需后续确认。不可include默认core.launch同时又启动自己的分配器，因为前者还会启动原mixer |
+
+拟用数据结构：PoseObservation保存stamp、T_WB、6×6测量协方差、标签数/重投影误差/拒绝原因；StateHealth保存初始化、最近有效视觉/压力/IMU时间、协方差/融合拒绝、时间重置和可控制轴。配置只读标定项，运行增益更新策略另批明确。
+
+USTROV EKF存在延迟输出与协方差导出问题，包装不是自动修复：先用真实录包验证时间、静态漂移、坐标、初始化/丢标行为，补所需接口；若须改上游库，另提最小补丁或替代估计器设计并确认，不本轮私自改子模块。初版优先选择树莓派侧一条融合链；是否改用PX4 EKF融合视觉要等水压支持和固件版本确认，不同时堆两套滤波且把相关输出当独立观测。
+
+### 12.7 水缸实验分阶段验收
+
+1. **只读硬件核验**：读取OS/ROS/固件与DDS版本、IMU/压力设备。使水压探头产生已知10cm浸深差，淡水应约增加981Pa；检查device_id、单位和压力实例。这不要求移动整个未验密封的机器人，也不启动电机。
+2. **机载相机定位台**：相机刚性安装且暂不启用推进器，缸底固定标签，水缸外贴尺和固定参考点。先空气后最终湿光路；独立记录已知5/10/20cm位移与旋转、中心/边缘和不同高度，统计尺度/静态抖动/延迟/丢标。具体距离受水缸尺寸限制；校准点和验证点分开。
+3. **无动力整机状态**：手动平移/转动、改变深度，比较视觉与融合Odometry。主动遮挡标签/断图验证健康降级；启动/重启不能先用未初始化零位姿建立home。录包回放不发布执行命令。
+4. **推进器台架与分配**：先断动力验证输出通道/解锁/断链，再用水中固定测力装置测正反推力、死区、电压和可达力矩。核实roll反作用力矩是否可用，不能默认Hippo系数适配。
+5. **受限首闭环**：依据实际Fx/Mz等权限选择直线/航向→小幅XY；确认浮力/姿态稳定和离底可视条件。没有Fz权限时，深度计只观测，不能声称定深。运动限幅按测力/净空/定位误差决定，不能直接复制当前仿真0.8m/s。标签丢失/时间异常/断通信→零命令与上锁策略必须实测；零推力不等于立刻静止或定深。
+
+水缸中心点活动范围需要扣除机体包络、转弯扫掠、定位误差和停止距离。建议先关注几厘米到十几厘米的位移，但尺寸/制动能力未知前不冻结数值。外部同源视觉只是反馈；后续定量控制评价使用独立标尺定位工装或独立标定的第二观测通道。缆绳张力和池壁回流应记入试验条件。
+
+本轮只读核查与设计记录，没有新增实现/测试脚本，没有改USTROV，没有连接/解锁真机，也没有新的运行验证结果。
+
+### 12.8 水缸尺寸对第一阶段的约束（2026-10-06补充）
+
+用户提供1.5×0.5×0.8m，暂按长宽高；0.8m为缸高，实际水深另测。以下是基于旧机体约0.4×0.3m的条件估算，不作为当前真机净空验收：
+
+- 长轴对齐时，若缸宽为净宽0.5m，左右各约0.1m，尚未扣推进器突出、标签、线缆和定位误差。
+- 矩形机体偏航角为theta时，横向包络为 `0.4*abs(sin(theta))+0.3*abs(cos(theta))`。45°时约0.495m，最大值0.5m；完整掉头几乎没有侧向余量。实际圆筒/推进器构型应测真实包络，不能把这个矩形近似当已测几何。
+- 当前首阶段按用户选择采用机载下视、缸底固定标签；手动沿长轴移动，先验证5/10cm等已知位移。应检查最低离底高度时的近焦、校正后可见范围、窗口折射和姿态歧义。此前缸外优先建议已被替代；下视安装不消除水缸宽度与转向包络限制。
+- 首轮控制目标收窄为纵向低速短程和小角度航向修正，距离/限幅待实测；不直接安排斜向/身后目标或原地180°转向。
+- 现有`PlanarTracker::update()`在制动后以`atan2(delta.y(),delta.x())`设置航向并进入TURNING。虽然允许负Fx制动，仍不等同固定航向倒车规划。若要长轴往返，需要另设计有符号纵向参考、倒推曲线/控制和横向越界终止；不得直接发布负home-X验证倒退。继续遵循先函数设计、确认后编码。
+- 侧壁间距小，壁面/回流影响需记录；这里测得的动力学参数不能直接作为开阔水域参数。没有Fz权限时，水深测量不能保证保持视野或不触底，浮力/姿态稳定需先确认。
+
+本次只更新场地事实和规划，没有更改控制器或运动参数。
+
+### 12.9 用户指定论文代码、标签制作与标定（2026-10-06补充，未实施）
+
+用户参考IEEE文献9341051，题名为Towards Micro Robot Hydrobatics: Vision-based Guidance, Navigation, and Control for Agile Underwater Vehicles in Confined Environments，IROS2020。本次只取得官方出版/会议元信息，未读论文全文；以下实现判断来自实际读取的[作者代码](https://github.com/DanielDuecker/microAUV-localization)，不据论文摘要推断性能。
+
+- 旧代码是catkin/rospy，`start_localization.launch`串联usb_cam→image_proc→apriltag_ros→ekf_node.py→MAVROS，字典配置在外部apriltag_ros包，不能从此仓库冻结其family。
+- `calibration_tags.py::callback_april()`保存相机看到的标签位置；`callback_gantry()`结合龙门架位置及固定旋转累积世界标签坐标；结束后写CSV。它不是镜头内参标定，作者的calibration_tank.csv不能用于本水缸。
+- `ekf_node.py::callback()`取标签相对位移的范数作为距离观测，并含1.05/1.1经验尺度系数；`ekf_class.py`状态为[x,y,z,机体前向速率]，姿态由另一路更新、角速度用于预测，输出姿态存在仅yaw构造。不能把它称为通用六自由度VIO或直接照搬经验参数。
+- 当前工程采用已知多标签角点的几何位姿观测→独立融合状态。AprilTag36h11作为新方案候选，以便和较新Hippo视觉对齐；OpenCV ArUco字典也可用，但生成/检测/尺寸约定必须一致。标定板建议ChArUco或棋盘格，与运行定位标签可分别选择。
+
+三类标定必须区分：
+
+| 标定 | 产出 | 工具/方法 |
+|---|---|---|
+| 相机内参及畸变 | K(3×3，焦距/主点为像素)、D、图像尺寸、模型名 | 复用OpenCV C++ camera_calibration / interactive calibration / ChArUco示例；若确属fisheye，调用其专用标定与校正API。发行版未必安装示例可执行文件，实施时核版本与构建 |
+| 相机相对机体 | T_BC(平移m、旋转) | 测量刚性安装外参，再用已知姿态/位置工装复核；相机内参软件不会自动给出该外参 |
+| 固定标签地图 | ID、标签尺寸m、各角点W坐标或T_WM | 在平整硬板按已知布局制作并实测，定义W为沿缸长/缸宽/Z向上；压力零点另做高度变换。无需作者龙门架即可建立初版规则地图 |
+
+先固定最终窗口、分辨率、焦距/数字裁切；空气中验证工具链，再在最终水中光路采集不同位置、倾角、距离的标定图像，不能只平行平移一张板。湿标定为工程近似，平面折射不一定能由单一K/D精确描述。用未参与拟合的已知位移、中心/边缘和不同高度验收；RMS重投影误差小不等于水下尺度准确。
+
+水缸板的初始试样可选8cm边长、不同ID的标签，先少量测试，再根据实际离底高度/可用像素布成两排长条地图。例：2×8个、中心间距14cm，图案包络约1.06×0.22m，四周另留白；仅为布局草案，不保证当前镜头能同时看到足够标签。黑色外边长作为所选AprilTag36h11检测尺寸时须和检测库定义一致，外部白边不混入尺寸；打印关闭缩放、实测尺寸、防反光并保持平整。IP66不能证明长期浸水能力，须明确壳体/窗口/出线密封；商品“250–6000mm”不作为镜头焦距，近焦能力需实测。
+
+首个可运行视觉交付只到Image/CameraInfo→标签角点→T_WB及质量，不接电机。沿用§12.6的CameraGeometry/FiducialLocalizer/Node设计，标定计算调用现成C++库，不另写一套优化器。
+
+### 12.10 树莓派逐电机开环：有限脉冲实现（2026-10-07）
+
+现有链为`ActuatorControls.control[8] → Px4ActuatorBridge::OnThrusterCommand → 50Hz OnOutputTimer → PublishMotorOutput → /fmu/in/actuator_motors → XRCE-DDS → PX4 → 已配置电机输出 → ESC`。开环不需要相机、DVL、Odometry或路径跟踪器；桥本身仍依赖VehicleStatus、显式arm和命令新鲜度。
+
+- 输入是无量纲[-1,1]，不是N、RPM或PWM微秒。`control[0]`仅在当前映射下对应PX4逻辑Motor1；物理PWM口还取决于PX4输出功能。`motor_input_indices[motor]`选择输入，`motor_signs[motor]`再乘符号。8槽不代表有8台推进器。
+- 默认配置：输出50Hz，命令300ms未更新触发上锁，预流1200ms。OnThrusterCommand按接收now()计新鲜度，不用header.stamp；拒绝NaN/Inf并裁剪有限值至[-1,1]。输入字段可省header；8元素数组保留。
+- `OnArmService()`先检查并进入PRESTREAM，返回success只表示接受流程。桥持续发零→请求Offboard→等待实际Offboard→请求Arm→等待实际Armed→ACTIVE才转发非零。`direct_actuator=true`意味着不自动提供PX4姿态/深度内环。
+- `OnStopService()`切DISARMING，全部输出NaN并请求普通Disarm；源码输入层拒绝NaN，不能由上游直接发NaN模拟停止。零指令的实际中位输出、负向命令均需可逆ESC及PX4配置匹配。
+- 原`core.launch.py`还启动mixer，会成为thruster_command的另一个源，不能与逐电机发布者并用。使用桥单节点或仅硬件桥的外部launch；新增自有启动仍XML .launch。仿真C1的actuation_probe是Fx/力矩输入通路，不直接复用为真机单电机试验。
+- 串口/波特率尚未核验；core.launch默认/dev/fcu_data、921600，而core README示例/dev/ttyPX4、115200，不能把任一当用户已确认接线。固件px4_msgs、VehicleStatus的_v1后缀、消息DDS暴露、四台实际输出/方向/ESC模式逐项只读核实后，再断动力核对解锁与输出。
+
+2026-10-07用户确认函数设计并要求执行，已按下表增加C++有限脉冲节点，避免手工切换publisher造成300ms断流；复用原PX4桥，不修改子模块。视觉实现仍待后续。
+
+| 新增文件 | 类/函数、输入输出与状态 |
+|---|---|
+| rov_control_ros/include/rov_control_ros/motor_probe_node.h、src/motor_probe_node.cpp | MotorProbeNode；loadConfig()校验启动参数；makeCommand(config,elapsed)纯计算8维梯形脉冲；onPx4Status()缓存模式/解锁；onBridgeOutput()记录实际桥输出及全NaN帧；onStart()请求已有bridge arm；onArmReply()只表示服务接受；onTimer()在PX4 Armed/Offboard与新鲜非全NaN桥输出齐备后进入RUNNING计脉冲；onStop()/beginStop()/requestBridgeStop()归零并异步上锁。阶段、配置、消息缓存归本节点的单线程回调修改 |
+| rov_control_ros/src/motor_probe_main.cpp | rclcpp init/spin/shutdown；单线程executor，状态仅由上述串行回调修改；启动默认IDLE不解锁，不自动重试非零脉冲 |
+| rov_bringup/config/motor_probe.yaml | ramp_s/hold_s/output_rate_hz/arm_timeout_s/bridge_output_timeout_s及服务名；channel/amplitude由launch传入，幅值缺省0。参数启动只读，改试验设置时先结束并重启；不填猜测的真机方向 |
+| rov_bringup/launch/motor_probe.launch | XML，启动唯一probe与已有bridge可执行程序，start_bridge=false可复用已有实例；不启动原core.launch中的mixer或额外传感器节点。Agent另按实际串口配置启动，不猜波特率。支持DDS前缀、状态话题及bridge_config_file |
+| rov_control_ros/test/test_motor_probe.cpp | 正式C++测试：纯波形边界；模拟PX4状态/VehicleCommand响应，启动实际USTROV桥程序，检查预流/拒绝解锁/有限脉冲/停止/冲突/断流。隔离域124、localhost，不用Agent或真实飞控 |
+
+运行阶段为IDLE→ARMING→RUNNING→STOPPING→FINISHED/FAULT。每周期输入PX4状态快照、桥输出时效、配置与单调时间，输出8维command与diagnostics；原始输入/桥输出/VehicleCommand/VehicleStatus通过rosbag关联。图发现约5Hz检查唯一命令源，不能代替跨进程锁；输出约50Hz。桥内部状态没有发布接口，因此不声称读取到了它的ACTIVE枚举；以arm服务接受、PX4 Armed/Offboard和连续有效桥输出建立运行条件。桥可能还需一个tick进入ACTIVE，首个脉冲采样为零。
+
+STOPPING取得stop接受、停止请求之后的全NaN桥输出和PX4已上锁状态后才进入FINISHED或FAULT；没有确认则继续零输入/每秒重试stop。FINISHED可显式start新试验；FAULT需检查并重启。结束后出现迟到的Armed状态会再次请求stop，不自动恢复脉冲。停止确认只代表协议观察，不能证明电机机械静止。Ctrl+C/SIGTERM在ROS仍有效时最多继续spin两秒；强杀则由原桥300ms命令看门狗和PX4失联策略处理，实际固件仍待验收。
+
+CMake选项ROV_BUILD_PX4_MOTOR_PROBE默认OFF，显式ON才要求px4_msgs并编译硬件工具，避免原仿真环境被硬件依赖阻塞。运行参数采用启动只读策略，区别于原point_tracking的动态参数；不混用两者调参方法。所有回调串行；异步服务future不在executor中同步等待，退出/重试清理挂起请求。
+
+验证顺序：纯C++波形/ROS与实际桥协议测试→真机断动力验链→水中固定推进器短脉冲、方向/死区→测力装置标定正反推力。本批实际编译/运行证据和可执行步骤集中于README§11；没有真机接入、PWM/ESC和水动力验证。原仿真C1/到点实现保持独立入口。

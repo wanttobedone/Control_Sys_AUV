@@ -1,11 +1,11 @@
 #include "rov_control_ros/trajectory_preview_node.h"
 
+#include "rov_control_core/planning/workspace_bounds.h"
 #include <cmath>
 #include <functional>
 #include <limits>
 #include <stdexcept>
 #include <vector>
-#include "rov_control_core/planning/workspace_bounds.h"
 
 namespace rov_control_ros
 {
@@ -15,8 +15,8 @@ Result<QuinticTrajectory> createTrajectory(const RobotState &state, const Previe
 {
   // 纯函数也检查四元数，使直接调用的测试/后续工具不能跳过 StateAdapter。
   const double quaternionNorm = state.q_WB.coeffs().stableNorm();
-  if (!state.q_WB.coeffs().allFinite() || !std::isfinite(quaternionNorm)
-      || std::abs(quaternionNorm - 1.0) > QUATERNION_NORM_TOLERANCE)
+  if (!state.q_WB.coeffs().allFinite() || !std::isfinite(quaternionNorm) ||
+      std::abs(quaternionNorm - 1.0) > QUATERNION_NORM_TOLERANCE)
   {
     return Result<QuinticTrajectory>::failure(ErrorCode::INVALID_QUATERNION, "规划起始姿态非法");
   }
@@ -34,7 +34,7 @@ Result<QuinticTrajectory> createTrajectory(const RobotState &state, const Previe
   if (horizontalNorm <= 1e-6)
   {
     return Result<QuinticTrajectory>::failure(ErrorCode::UNSUPPORTED_DIRECTION,
-                                               "机头接近竖直，无法定义水平预览方向");
+                                              "机头接近竖直，无法定义水平预览方向");
   }
   direction /= horizontalNorm;
 
@@ -52,8 +52,8 @@ Result<QuinticTrajectory> createTrajectory(const RobotState &state, const Previe
 }
 
 Result<nav_msgs::msg::Path> makePathMessage(const QuinticTrajectory &trajectory,
-                                           const rclcpp::Time &epoch,
-                                           std::size_t count, const std::string &frame)
+                                            const rclcpp::Time &epoch, std::size_t count,
+                                            const std::string &frame)
 {
   if (count < 2 || count > 10001 || frame.empty() || epoch.nanoseconds() < 0)
   {
@@ -63,8 +63,8 @@ Result<nav_msgs::msg::Path> makePathMessage(const QuinticTrajectory &trajectory,
   // builtin_interfaces/Time 的 sec 是 int32。先用 long double 检查加法范围，
   // 再取整到 ns；不要先转换巨大 duration 后才检查，此时已经可能溢出。
   constexpr std::int64_t maxStampNs =
-    static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()) * 1000000000LL
-    + 999999999LL;
+      static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()) * 1000000000LL +
+      999999999LL;
   const long double durationNs = static_cast<long double>(trajectory.duration()) * 1e9L;
   const long double endNs = static_cast<long double>(epoch.nanoseconds()) + durationNs;
   if (!std::isfinite(durationNs) || endNs > static_cast<long double>(maxStampNs) - 0.5L)
@@ -89,8 +89,8 @@ Result<nav_msgs::msg::Path> makePathMessage(const QuinticTrajectory &trajectory,
     const auto &sample = result.value();
     geometry_msgs::msg::PoseStamped pose;
     pose.header.frame_id = frame;
-    const auto offsetNs = static_cast<std::int64_t>(
-      std::llround(static_cast<long double>(time) * 1e9L));
+    const auto offsetNs =
+        static_cast<std::int64_t>(std::llround(static_cast<long double>(time) * 1e9L));
     pose.header.stamp = rclcpp::Time(epoch.nanoseconds() + offsetNs, epoch.get_clock_type());
     pose.pose.position.x = sample.p_W.x();
     pose.pose.position.y = sample.p_W.y();
@@ -105,7 +105,7 @@ Result<nav_msgs::msg::Path> makePathMessage(const QuinticTrajectory &trajectory,
 }
 
 TrajectoryPreviewNode::TrajectoryPreviewNode(const rclcpp::NodeOptions &options)
-  : Node("trajectory_preview", options), nextDiagnosticSteady_(SteadyClock::now())
+    : Node("trajectory_preview", options), nextDiagnosticSteady_(SteadyClock::now())
 {
   config_ = loadConfig();
   adapter_ = std::make_unique<StateAdapter>(config_.worldFrame, config_.bodyFrame);
@@ -115,32 +115,32 @@ TrajectoryPreviewNode::TrajectoryPreviewNode(const rclcpp::NodeOptions &options)
   // 订阅使用相对名称，随 vehicle namespace 隔离；~ 表示本节点私有名称。
   // best-effort 请求可接可靠或 best-effort 状态发布者，队列只保存最近一份。
   odometrySub_ = create_subscription<nav_msgs::msg::Odometry>(
-    "odometry", rclcpp::SensorDataQoS().keep_last(1),
-    std::bind(&TrajectoryPreviewNode::onOdometry, this, _1));
-  pathPub_ = create_publisher<nav_msgs::msg::Path>(
-    "~/planned_path", rclcpp::QoS(1).reliable().transient_local());
-  referencePub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
-    "~/reference_pose", rclcpp::QoS(1));
-  diagnosticPub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
-    "~/diagnostics", rclcpp::QoS(10));
-  startService_ = create_service<Trigger>(
-    "~/start", std::bind(&TrajectoryPreviewNode::onStart, this, _1, _2));
-  stopService_ = create_service<Trigger>(
-    "~/stop", std::bind(&TrajectoryPreviewNode::onStop, this, _1, _2));
+      "odometry", rclcpp::SensorDataQoS().keep_last(1),
+      std::bind(&TrajectoryPreviewNode::onOdometry, this, _1));
+  pathPub_ = create_publisher<nav_msgs::msg::Path>("~/planned_path",
+                                                   rclcpp::QoS(1).reliable().transient_local());
+  referencePub_ =
+      create_publisher<geometry_msgs::msg::PoseStamped>("~/reference_pose", rclcpp::QoS(1));
+  diagnosticPub_ =
+      create_publisher<diagnostic_msgs::msg::DiagnosticArray>("~/diagnostics", rclcpp::QoS(10));
+  startService_ =
+      create_service<Trigger>("~/start", std::bind(&TrajectoryPreviewNode::onStart, this, _1, _2));
+  stopService_ =
+      create_service<Trigger>("~/stop", std::bind(&TrajectoryPreviewNode::onStop, this, _1, _2));
   resetService_ = create_service<Trigger>(
-    "~/reset_fault", std::bind(&TrajectoryPreviewNode::onResetFault, this, _1, _2));
+      "~/reset_fault", std::bind(&TrajectoryPreviewNode::onResetFault, this, _1, _2));
   timer_ = create_wall_timer(std::chrono::duration<double>(config_.timer_period_s),
-                            std::bind(&TrajectoryPreviewNode::onTimer, this));
+                             std::bind(&TrajectoryPreviewNode::onTimer, this));
 
   // 所有参数已经读取；拒绝运行中修改，避免参数服务器显示值与实际 config 不一致。
   parameterGuard_ = add_on_set_parameters_callback(
-    [](const std::vector<rclcpp::Parameter> &)
-    {
-      rcl_interfaces::msg::SetParametersResult result;
-      result.successful = false;
-      result.reason = "本批参数仅在启动时加载，请修改 YAML 后重启节点";
-      return result;
-    });
+      [](const std::vector<rclcpp::Parameter> &)
+      {
+        rcl_interfaces::msg::SetParametersResult result;
+        result.successful = false;
+        result.reason = "本批参数仅在启动时加载，请修改 YAML 后重启节点";
+        return result;
+      });
   RCLCPP_INFO(get_logger(), "只读预览节点已启动：等待状态，start 服务生成参考");
 }
 
@@ -158,13 +158,11 @@ PreviewConfig TrajectoryPreviewNode::loadConfig()
   config.future_tolerance_s = declare_parameter<double>("future_tolerance_s", 0.05);
   config.max_receive_gap_s = declare_parameter<double>("max_receive_gap_s", 2.0);
   const auto count = declare_parameter<std::int64_t>("path_point_count", 101);
-  const auto minimum = declare_parameter<std::vector<double>>(
-    "workspace_min_W", {0.8, 0.5, -1.0});
-  const auto maximum = declare_parameter<std::vector<double>>(
-    "workspace_max_W", {1.8, 1.7, 0.0});
+  const auto minimum = declare_parameter<std::vector<double>>("workspace_min_W", {0.8, 0.5, -1.0});
+  const auto maximum = declare_parameter<std::vector<double>>("workspace_max_W", {1.8, 1.7, 0.0});
 
-  if (config.worldFrame.empty() || config.bodyFrame.empty() || minimum.size() != 3
-      || maximum.size() != 3 || count < 2 || count > 10001)
+  if (config.worldFrame.empty() || config.bodyFrame.empty() || minimum.size() != 3 ||
+      maximum.size() != 3 || count < 2 || count > 10001)
   {
     throw std::invalid_argument("frame、三维空间数组或显示点数非法");
   }
@@ -180,14 +178,13 @@ PreviewConfig TrajectoryPreviewNode::loadConfig()
   {
     throw std::invalid_argument("工作空间、预览长度或运动学限制非法");
   }
-  // 限制周期范围，避免零周期忙循环或过大 duration 转换溢出。
-  if (!std::isfinite(config.timer_period_s) || config.timer_period_s < 0.001
-      || config.timer_period_s > 1.0)
+  // 具体试验频率属于配置，ROS负责检查duration是否能表示。
+  if (!std::isfinite(config.timer_period_s) || config.timer_period_s <= 0.0)
   {
-    throw std::invalid_argument("timer_period_s 必须在 [0.001,1] 秒");
+    throw std::invalid_argument("timer_period_s 必须为有限正秒数");
   }
-  for (const double value : {config.max_state_age_s, config.future_tolerance_s,
-                             config.max_receive_gap_s})
+  for (const double value :
+       {config.max_state_age_s, config.future_tolerance_s, config.max_receive_gap_s})
   {
     if (!std::isfinite(value) || value <= 0.0)
     {
@@ -207,9 +204,8 @@ void TrajectoryPreviewNode::onOdometry(const nav_msgs::msg::Odometry::ConstShare
   const auto result = adapter_->convert(*message);
   if (!result.ok())
   {
-    latestState_.reset();
-    lastReceiveSteady_.reset();
-    clearRun(PreviewStatus::FAULT, result.status().message);
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "丢弃Odometry：%s",
+                         result.status().message.c_str());
     return;
   }
   latestState_ = result.value();
@@ -218,7 +214,7 @@ void TrajectoryPreviewNode::onOdometry(const nav_msgs::msg::Odometry::ConstShare
 }
 
 Status TrajectoryPreviewNode::isStateFresh(const rclcpp::Time &rosNow,
-                                          SteadyClock::time_point steadyNow) const
+                                           SteadyClock::time_point steadyNow) const
 {
   if (!latestState_ || !lastReceiveSteady_)
   {
@@ -269,7 +265,8 @@ void TrajectoryPreviewNode::onStart(const Trigger::Request::SharedPtr,
     response->message = result.status().message;
     return;
   }
-  const auto path = makePathMessage(result.value(), rosNow, config_.pathPointCount, config_.worldFrame);
+  const auto path =
+      makePathMessage(result.value(), rosNow, config_.pathPointCount, config_.worldFrame);
   if (!path.ok())
   {
     response->message = path.status().message;
@@ -378,7 +375,8 @@ void TrajectoryPreviewNode::onTimer()
   }
 }
 
-void TrajectoryPreviewNode::publishReference(const ReferenceSample &sample, const rclcpp::Time &stamp)
+void TrajectoryPreviewNode::publishReference(const ReferenceSample &sample,
+                                             const rclcpp::Time &stamp)
 {
   geometry_msgs::msg::PoseStamped message;
   message.header.frame_id = config_.worldFrame;
@@ -416,21 +414,21 @@ void TrajectoryPreviewNode::publishDiagnostics()
   std::string stateName;
   switch (status_)
   {
-    case PreviewStatus::WAIT_STATE:
-      stateName = "WAIT_STATE";
-      break;
-    case PreviewStatus::READY:
-      stateName = "READY";
-      break;
-    case PreviewStatus::PREVIEW:
-      stateName = "PREVIEW";
-      break;
-    case PreviewStatus::FINISHED:
-      stateName = "FINISHED";
-      break;
-    case PreviewStatus::FAULT:
-      stateName = "FAULT";
-      break;
+  case PreviewStatus::WAIT_STATE:
+    stateName = "WAIT_STATE";
+    break;
+  case PreviewStatus::READY:
+    stateName = "READY";
+    break;
+  case PreviewStatus::PREVIEW:
+    stateName = "PREVIEW";
+    break;
+  case PreviewStatus::FINISHED:
+    stateName = "FINISHED";
+    break;
+  case PreviewStatus::FAULT:
+    stateName = "FAULT";
+    break;
   }
   // 局部添加函数只用于消息填充，无隐藏状态机或控制计算。
   const auto add = [&diagnostic](const std::string &key, const std::string &value)
@@ -496,4 +494,4 @@ void TrajectoryPreviewNode::clearRun(PreviewStatus nextStatus, const std::string
   pathPub_->publish(emptyPath);
   publishDiagnostics();
 }
-}
+} // namespace rov_control_ros

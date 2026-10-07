@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 一套 Gazebo + 一套 mixer + 一个输入试验节点；启动本身不发非零命令。 -->
+  <arg name="vehicle_name" default="uuv00"/>
+  <arg name="start_gui" default="true"/>
+  <arg name="channel" default="surge"/>
+  <arg name="amplitude" default="0.0"/>
+  <arg name="config_file" default="$(find-pkg-share rov_bringup)/config/actuation_probe.yaml"/>
+  <include file="$(find-pkg-share rov_bringup)/launch/hippo_sim.launch">
+    <arg name="vehicle_name" value="$(var vehicle_name)"/>
+    <arg name="start_gui" value="$(var start_gui)"/>
+  </include>
+  <include file="$(find-pkg-share rov_bringup)/launch/actuation_probe.launch">
+    <arg name="vehicle_name" value="$(var vehicle_name)"/>
+    <arg name="channel" value="$(var channel)"/>
+    <arg name="amplitude" value="$(var amplitude)"/>
+    <arg name="config_file" value="$(var config_file)"/>
+  </include>
+</launch>

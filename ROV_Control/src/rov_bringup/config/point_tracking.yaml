@@ -1,0 +1,38 @@
+# 原 Hippo 四推进器水平到点。参数均为仿真假设，不代表真实ROV标定。
+/**:
+  ros__parameters:
+    world_frame: map
+    # 活动盒只约束机器人中心；上游水池没有池壁碰撞体。
+    workspace_min_W: [0.0, 0.0, -2.0]
+    workspace_max_W: [4.0, 5.0, 2.0]
+    max_speed_mps: 0.5 #m/s
+    max_acceleration_mps2: 0.6 #m/s^2
+    # 名义前向模型 m*dv/dt=Fx-d*v；用于前馈，可按辨识结果修改。
+    mass_kg: 2.31
+    surge_drag_Nspm: 5.39
+    position_kp_Npm: 4.0
+    velocity_kd_Nspm: 4.5
+    lookahead_m: 0.20
+    # 顺序roll/pitch/yaw；物理力矩增益，与C1的无量纲effort不同。
+    attitude_kp: [0.035, 0.05, 0.10]
+    attitude_kd: [0.028, 0.06, 0.08]
+    max_force_N: 1.5 #N，机体前向
+    max_torque_Nm: [0.006, 0.025, 0.025] #滚转、俯仰、偏航力矩请求
+    # 归一化电机幅值，合法范围(0,1]；由分配器统一限幅，不是推力百分比。
+    max_thruster_command: 0.4
+    arrival_radius_m: 0.025
+    arrival_speed_mps: 0.015
+    arrival_dwell_s: 0.75
+    reacquire_radius_m: 0.05
+    mission_timeout_s: 90.0 #0关闭任务超时
+    # 控制周期20ms；以下是任务的失效检测阈值
+    max_state_age_s: 0.25
+    max_receive_gap_s: 0.35
+    max_ros_step_s: 0.15 #一次控制回调可接受的仿真时间增量，仅在ROS层检查
+    # 以下四项为实际状态监测，0可关闭单项；不是参考轨迹的运动限制。
+    # 启用时实际速度阈值必须大于max_speed_mps，避免参考本身触发故障。
+    max_actual_speed_mps: 1.0
+    max_tilt_rad: 0.4 #机体z与世界z夹角，rad
+    max_angular_speed_radps: 2.0 #三维角速度模长，rad/s
+    # 原模型正浮力，上电后可能上浮约0.4m；只监测，不伪装成深度保持。
+    max_depth_drift_m: 0.65

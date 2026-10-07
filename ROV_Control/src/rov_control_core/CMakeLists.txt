@@ -10,12 +10,14 @@ if(ROV_CORE_WITH_AMENT)
 endif()
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 
-# 三个实现文件编译成一个库；头文件中的类声明供调用方包含。
+# 规划与水平跟踪的实现文件编译成同一个库；头文件中的类声明供调用方包含。
 # 带命名空间的别名使依赖关系明确：调用方链接 rov_control_core::rov_control_core。
 add_library(${PROJECT_NAME}
   src/planning/workspace_bounds.cpp
   src/planning/line_path.cpp
   src/planning/quintic_trajectory.cpp
+  src/tracking/planar_tracker.cpp
+  src/tracking/hippo_allocator.cpp
 )
 add_library(rov_control_core::rov_control_core ALIAS ${PROJECT_NAME})
 # std::optional、std::clamp 等需要 C++17；不使用编译器私有语言扩展。
@@ -33,8 +35,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
 endif()
 
-# CTest 负责运行测试程序；GoogleTest 负责程序内部的 21 个测试用例。
-# 因此 colcon 汇总可能显示 22 项：1 个 CTest 项加 21 个 GoogleTest 用例。
+# CTest 负责运行测试程序；GoogleTest 负责程序内部的用例。
+# 当前数学核心有21个规划用例、7个跟踪/分配用例，另有两个CTest入口。
 include(CTest)
 if(BUILD_TESTING)
   find_package(GTest REQUIRED)
@@ -47,6 +49,10 @@ if(BUILD_TESTING)
   file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_results/${PROJECT_NAME}")
   add_test(NAME path_trajectory COMMAND test_path_trajectory
     "--gtest_output=xml:${CMAKE_CURRENT_BINARY_DIR}/test_results/${PROJECT_NAME}/path_trajectory.xml")
+  add_executable(test_planar_tracking test/test_planar_tracking.cpp)
+  target_link_libraries(test_planar_tracking PRIVATE ${PROJECT_NAME} GTest::gtest_main)
+  add_test(NAME planar_tracking COMMAND test_planar_tracking
+    "--gtest_output=xml:${CMAKE_CURRENT_BINARY_DIR}/test_results/${PROJECT_NAME}/planar_tracking.xml")
 endif()
 
 if(ROV_CORE_WITH_AMENT)

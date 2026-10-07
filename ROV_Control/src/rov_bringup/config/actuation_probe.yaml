@@ -1,0 +1,32 @@
+# C1 只用于 Hippo 仿真。先 amplitude=0 检查通路，再显式设置正反试验幅值。
+/**:
+  ros__parameters:
+    world_frame: map
+    channel: surge
+    # 当前保持时间下，surge/roll/pitch 已验证 ±0.6；yaw 用 ±0.55。
+    # yaw ±0.6 会触发相对转角保护，不能据相同命令幅值假定各轴响应相同。
+    amplitude: 0.0
+    # 命令域无量纲；本工具的硬上限为 0.65，越限直接拒绝。
+    effort_limit: 0.65
+    baseline_s: 1.0
+    rise_s: 0.1
+    # 初始0.3秒在 pitch/yaw 触发角速度保护；实测后缩短为0.1秒。
+    hold_s: 0.1
+    fall_s: 0.1
+    observe_s: 1.0
+    timer_period_s: 0.02
+    max_state_age_s: 0.10
+    max_receive_gap_s: 0.15
+    future_tolerance_s: 0.05
+    max_ros_step_s: 0.10
+    zero_repeat_s: 0.50
+    max_start_speed_mps: 0.03
+    max_start_rate_radps: 0.10
+    max_start_tilt_rad: 0.0872664626  # 5°
+    max_displacement_m: 0.10
+    max_rotation_rad: 0.1745329252   # 相对起始姿态 10°
+    max_speed_mps: 0.20
+    max_rate_radps: 0.50
+    # 仿真参考中心活动盒，不是物理池壁碰撞体或真机安全区域认证。
+    workspace_min_W: [0.8, 0.5, -1.0]
+    workspace_max_W: [1.8, 1.7, 0.0]

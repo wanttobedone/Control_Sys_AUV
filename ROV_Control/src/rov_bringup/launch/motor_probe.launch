@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- Agent 由已确认的串口设置另行启动；这里不启动仿真、mixer 或控制器。 -->
+  <arg name="vehicle_name" default="uuv00"/>
+  <arg name="px4_topic_prefix" default="/fmu"/>
+  <arg name="vehicle_status_topic" default="$(var px4_topic_prefix)/out/vehicle_status_v1"/>
+  <arg name="channel" default="0" description="输入数组下标 0..7，不是 MAIN/AUX 插口编号"/>
+  <arg name="amplitude" default="0.0" description="[-1,1] 无量纲；缺省全零验链"/>
+  <arg name="start_bridge" default="true" description="已有同一桥时设 false，禁止重复启动"/>
+  <arg name="config_file" default="$(find-pkg-share rov_bringup)/config/motor_probe.yaml"/>
+  <arg name="bridge_config_file"
+       default="$(find-pkg-share ustrov_core)/config/px4_actuator_bridge.yaml"/>
+
+  <node if="$(var start_bridge)" pkg="ustrov_core" exec="px4_actuator_bridge"
+        name="px4_actuator_bridge" namespace="$(var vehicle_name)" output="screen">
+    <param from="$(var bridge_config_file)"/>
+    <param name="use_sim_time" value="false"/>
+    <param name="px4_topic_prefix" value="$(var px4_topic_prefix)"/>
+    <param name="vehicle_status_topic" value="$(var vehicle_status_topic)"/>
+    <param name="thruster_command_topic" value="thruster_command"/>
+  </node>
+  <node pkg="rov_control_ros" exec="motor_probe_node" name="motor_probe"
+        namespace="$(var vehicle_name)" output="screen">
+    <param from="$(var config_file)"/>
+    <param name="use_sim_time" value="false"/>
+    <param name="channel" value="$(var channel)" type="int"/>
+    <param name="amplitude" value="$(var amplitude)" type="float"/>
+    <param name="vehicle_status_topic" value="$(var vehicle_status_topic)"/>
+    <param name="actuator_motors_topic" value="$(var px4_topic_prefix)/in/actuator_motors"/>
+  </node>
+</launch>

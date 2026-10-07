@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 原版Hippo模型/状态桥；不include spawn_hippocampus，因其会额外启动归一化mixer。
+       自研节点已完成物理分配并发布thruster_command，必须只有这一套命令源。 -->
+  <arg name="vehicle_name" default="uuv00"/>
+  <arg name="start_gui" default="true"/>
+  <arg name="start_rviz" default="true"/>
+  <arg name="config_file" default="$(find-pkg-share rov_bringup)/config/point_tracking.yaml"/>
+  <include file="$(find-pkg-share ustrov_sim)/launch/start_gazebo.launch.py">
+    <arg name="start_gui" value="$(var start_gui)"/>
+  </include>
+  <include file="$(find-pkg-share ustrov_sim)/launch/spawn_vehicle.launch.py">
+    <arg name="vehicle_name" value="$(var vehicle_name)"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="fake_state_estimation" value="true"/>
+    <arg name="fake_vision" value="false"/>
+    <arg name="use_vertical_camera" value="false"/>
+    <arg name="use_acoustic_modem" value="false"/>
+  </include>
+  <include file="$(find-pkg-share rov_bringup)/launch/point_tracking.launch">
+    <arg name="vehicle_name" value="$(var vehicle_name)"/>
+    <arg name="start_rviz" value="$(var start_rviz)"/>
+    <arg name="config_file" value="$(var config_file)"/>
+  </include>
+</launch>

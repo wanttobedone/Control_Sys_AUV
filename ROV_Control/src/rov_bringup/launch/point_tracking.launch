@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 只接“无上游mixer”的Hippo仿真。已有原组合launch时先退出，使用下方总入口。 -->
+  <arg name="vehicle_name" default="uuv00"/>
+  <arg name="start_rviz" default="true"/>
+  <arg name="config_file" default="$(find-pkg-share rov_bringup)/config/point_tracking.yaml"/>
+  <node pkg="rov_control_ros" exec="point_tracking_node" name="point_tracking"
+        namespace="$(var vehicle_name)" output="screen">
+    <param from="$(var config_file)"/>
+    <param name="use_sim_time" value="true"/>
+    <param name="body_frame" value="$(var vehicle_name)/base_link"/>
+    <param name="home_frame" value="$(var vehicle_name)/home"/>
+  </node>
+  <node if="$(var start_rviz)" pkg="rviz2" exec="rviz2" name="tracking_rviz"
+        namespace="$(var vehicle_name)" output="log"
+        args="-d $(find-pkg-share rov_bringup)/rviz/point_tracking.rviz">
+    <param name="use_sim_time" value="true"/>
+    <env name="QT_QPA_PLATFORM" value="xcb"/>
+    <remap from="/tracking/odometry" to="/$(var vehicle_name)/odometry"/>
+    <remap from="/tracking/planned_path" to="/$(var vehicle_name)/point_tracking/planned_path"/>
+    <remap from="/tracking/actual_path" to="/$(var vehicle_name)/point_tracking/actual_path"/>
+    <remap from="/tracking/reference_pose" to="/$(var vehicle_name)/point_tracking/reference_pose"/>
+    <remap from="/tracking/goal" to="/$(var vehicle_name)/point_tracking/accepted_goal"/>
+  </node>
+</launch>
