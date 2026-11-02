@@ -1,0 +1,15 @@
+%YAML:1.0
+---
+# 只读单标签实验；不是ROS参数文件。实际实验配置会另存到结果目录。
+target_id: 16
+tag_width_m: 0.080            # 黑白交界检测外框，不是100mm白边成品。
+tag_height_m: 0.080
+detector_threads: 2
+max_hamming: 0
+min_edge_px: 35.0
+min_corner_margin_px: 4.0
+# 以下均为可调实验筛选值，不是精度认证，也不是标定阶段的总RMS门槛。
+max_reprojection_error_px: 3.0
+ambiguity_error_gap_px: 0.15  # 两解误差很接近且旋转明显不同，标为ambiguous_pose。
+ambiguity_rotation_deg: 5.0
+camera_fps: 30.0             # USB采集请求；视频时间使用文件自己的FPS。

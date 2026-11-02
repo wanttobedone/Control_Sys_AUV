@@ -437,17 +437,17 @@ C1 没有加入死区补偿；后续水平闭环已按 §5.3 对原模型做静�
 
 ### 12.1 系统目标与已知条件
 
-先实现真实传感器驱动的小范围水平闭环：发布相对本次任务 home 的 XY 目标，由视觉、IMU、深度提供有效状态，在实际控制权限允许时沿用当前路径/时间律/跟踪思想。视觉直接使用真实水缸成像链，不增加视觉仿真前置条件。第一批仅定位与数据记录，不启用推进器。MPC仍未实现，不把换状态来源称为完成MPC。
+当前目标按2026-10-07用户反馈收敛为：硬件与逐电机核验→IMU/压力只读状态→条件允许时小幅角速度闭环→机载视觉状态→固定航向的纵向短程PD→局部运动辨识→一维MPC。完整逐台测力改为可选，不作为首闭环前置；逐步完成标志集中README§11.12。后续可扩大为相对home的XY到点，但当前窄缸不安排任意转向。视觉直接使用真实水缸成像链，其首批仅定位与记录、不启用推进器。MPC仍未实现，不把换状态来源称为完成MPC。
 
-用户确认：Pi 4B、Pixhawk 6C、Ubuntu 24.04对应ROS 2（按Jazzy规划，未读取设备）、深度计接Pixhawk、无DVL。四推进器在侧面且与Hippo相近；未有精确几何和推力曲线。已有HSK USB单目相机，传图正常；用户提供商品规格为500万IMX335、2.8mm、120°、“无畸变”、IP66、2m线，真实投影模型/近焦/帧率/浸水能力未核验，不再直接断言是鱼眼。透明水缸1.5×0.5×0.8m，暂按长宽高，内/外尺寸和实际水深未知；尺寸限制见§12.8。用户现已选择相机固定在ROV上，按下视/缸底标签设计。
+用户确认：Pi 4B、Pixhawk 6C、Ubuntu 24.04对应ROS 2（按Jazzy规划，未读取设备）、深度计接Pixhawk、无DVL。四推进器在侧面且与Hippo相近；未有精确几何和推力曲线。已有HSK USB单目相机，传图正常；用户提供商品规格为500万IMX335、2.8mm、120°、“无畸变”、IP66、2m线，真实投影模型/近焦/帧率/浸水能力未核验，不再直接断言是鱼眼。透明水缸于2026-10-19确认内净长1.35m、宽0.65m，旧0.8m为缸高描述，实际水深仍未知；尺寸限制见§12.8。用户现已选择相机固定在ROV上，按下视/缸底标签设计。
 
 ### 12.2 当前代码能复用到哪一步
 
 | 模块 | 已有事实 | 迁移工作 |
 |---|---|---|
 | LinePathPlanner / QuinticTrajectory / HomeFrame | C++几何、时间律、软件原点已完成 | 保留算法，重设实际空间与运动限制；home只在定位有效后建立 |
-| PlanarTracker | 前向力、姿态力矩，横向误差通过转向修正 | 用真实质量/阻尼/增益；核验需要的Fx/Mx/My/Mz是否可达，不能用四电机数量替代能力检查 |
-| HippoAllocator | 固定Hippo安装几何、反作用力矩与推力曲线 | 真机另做可配置分配，实测方向/力臂/曲线/饱和，原仿真类保留 |
+| PlanarTracker | 前向力、姿态力矩，横向误差通过转向修正 | 首轮真机另设计固定航向、有符号纵向参考的归一化指令控制器；原类保留仿真及未来物理控制参考，不能将其N级输出直接当电机指令 |
+| HippoAllocator | 固定Hippo安装几何、反作用力矩与推力曲线 | 原仿真类保留；首轮真机另设计经验混控，核验真实通道/方向/组合响应/饱和。准确N/N·m分配和逐台测力作为后续可选路线 |
 | PointTrackingNode | 当前loadConfig强制use_sim_time=true，状态来自仿真Odometry | 不删除保护来冒充迁移；另建真机入口，复用计算层，补定位健康和解锁握手 |
 | USTROV PX4 bridge | ActuatorControls→ActuatorMotors，显式arm/stop、prestream、命令超时、通道映射，direct_actuator=true | 校验固件/px4_msgs、实际PWM输出功能、可逆ESC和未装通道；避免叠加两次电机符号 |
 | USTROV sensor bridge | SensorCombined FRD→FLU；SensorBaro压力转发；启动时估计时间偏移 | 确认外部水压计驱动/实例/device_id和时间对齐，现有代码未按device_id筛选 |
@@ -472,7 +472,7 @@ C1 没有加入死区补偿；后续水平闭环已按 §5.3 对原模型做静�
 ### 12.4 相机模型、标签与坐标契约
 
 1. 先核相机输出是原始图还是内部矫正图，固定分辨率/焦距/曝光，保持Image与CameraInfo一致。“120°/无畸变”不是镜头模型证明；按标定和独立误差检验选择针孔加畸变或fisheye模型。若采用fisheye，先生成合适视场的虚拟针孔图，再检测/PnP；虚拟K与零畸变供后级使用，不能将原鱼眼D套给普通针孔PnP。去畸变映射表初始化时缓存。
-2. 默认候选AprilTag36h11以对齐Hippo，若用户已印ArUco则配置正确字典；不能混用图案和字典。测量实际标签边长，固定到平整、防水、哑光硬板。多标签几何可提高覆盖与冗余，但不是免除平面位姿歧义/折射的保证。
+2. 使用与实物一致的AprilTag36h11字典；若换ArUco则配置对应字典，不能混用。测量实际标签边长，按10-19用户选择直接固定到缸底，保持标签平整、不移位和清晰白边；不要求额外底板。多标签几何可提高覆盖与冗余，但不是免除平面位姿歧义/折射的保证。
 3. 确认最终空气/窗口/水光路后湿标定，并用不同位置/高度/姿态的已知位移独立验证。鱼眼畸变校正不能消除平面窗口折射；若近似模型在所需区域失败，先缩小视场/工作区域或进一步采用折射模型，不能调控制增益掩盖系统定位偏差。
 4. 坐标约定：W为水缸固定map、Z向上（建议水面为z=0，缸底为-H），B为机体FLU，C为光学系右/下/前。T_AB将B坐标变换到A。
 
@@ -491,16 +491,18 @@ Pixhawk IMU → USTROV sensor bridge → imu(FLU、rad/s、m/s²)
 已确认的水压实例 → pressure(Pa) → 水面零点/杆臂 → 深度约束
     → C++融合状态（候选复用USTROV ekf，经回放审核）
     → Odometry + StateHealth → StateAdapter → RobotState
-goal(home) → LinePathPlanner → QuinticTrajectory → PlanarTracker
-    → 物理力/力矩请求 → 真机分配/曲线 → 执行许可与限幅
+goal(home长轴) → 有符号纵向参考/五次时间律 → 纵向PD(后换MPC) + 航向控制
+    → 无量纲纵向/偏航指令 → 经核验的经验混控 → 执行许可与限幅
     → 唯一thruster_command → USTROV actuator bridge → DDS → PX4 → ESC
 ~~~
 
-所有传感器输入、观测/拒绝原因、状态健康、参考、物理请求、分配后可达力、归一化指令、PX4状态及延迟记录到rosbag。相机处理独立进程，最新帧优先、队列有界；状态节点按IMU采样时间预测，观测按采集时间融合，控制节点定时计算。初始目标视觉约20Hz、控制50Hz，均需Pi实测P95/最坏延迟再定；频率是目标不是已达到的结果。
+所有传感器输入、观测/拒绝原因、状态健康、参考、无量纲请求、实际发送电机数组、限幅标记、PX4状态及延迟记录到rosbag。只有以后启用物理分配模型时才记录其估计可达力，不能把无量纲输入标作牛顿。相机处理独立进程，最新帧优先、队列有界；状态估计保留采样时间，控制节点定时计算。初始目标视觉约20Hz、控制50Hz，均需Pi实测P95/最坏延迟再定；频率是目标不是已达到的结果。归一化控制/混控的新接口须在实施前补完整函数级设计，下面旧物理路线表不能直接当作该批已确认设计。
 
 真机use_sim_time=false；控制dt用单调时钟，观测保留源时间并统一时间基准。缸外PC相机与Pi分机时须核验时钟同步和网络延迟；同机处理也不能以处理结束时间冒充曝光时间。视觉丢失时允许估计器短时预测，但StateHealth必须降级并由控制停止；不得不断重打时间戳把旧观测伪装成新定位。
 
 ### 12.6 暂定文件与函数级接口（均未创建）
+
+本节保留整体真机分层；2026-10-07首批机载视觉的具体实施范围、文件、回调及验收以§13为准，融合与执行入口仍属后续批次。
 
 自研C++遵循现有.h/.cpp中文注释风格。新增一个`rov_localization`包隔离OpenCV/相机依赖；控制数学仍在core，运行入口在ros，配置启动在bringup。以下每个.h/.cpp成对，main仅init/spin/shutdown。
 
@@ -510,8 +512,8 @@ goal(home) → LinePathPlanner → QuinticTrajectory → PlanarTracker
 | localization/fiducial_localizer.h/.cpp，FiducialLocalizer | loadGeometry(标签尺寸/地图或机体标签外参)；detect(图像)→ID/角点；estimateBodyPose(角点,K,外参)→PoseObservation；checkQuality(观测)→通过/原因 | 保存固定几何和上一有效观测；PnP正深度、重投影、跳变/歧义检查；拒绝帧不能刷新last_valid |
 | localization/fiducial_localization_node.h/.cpp | onCameraInfo缓存模型；onImage→rectify/detect/estimate/check→publishPose/publishHealth | 相机回调为唯一视觉状态写入者；只发观测，不做二次惯导融合 |
 | localization/real_state_node.h/.cpp，RealStateNode | onImu→SetImuData/Update；onPressure→校零/SetBaroData；onVision→门控/SetVisionData；makeOdometry→统一时刻的p/q/v/omega；evaluateHealth；reset | 候选持有已有Ekf库；保存源时间、初始标定、有效观测年龄/质量。输出v_B=R_WBᵀv_W，omega_B使用时间对齐且正确去偏的IMU |
-| core/tracking/thruster_allocator.h/.cpp，ThrusterAllocator | configure(r_i,d_i,曲线,限幅)→秩/可达轴报告；allocate(物理力旋量)→各电机N/指令/实际可达力及残差 | 几何与标定持久化；未装通道明确处理；饱和后必须报告实际可达量，不把请求冒充输出 |
-| ros/hardware_tracking_node.h/.cpp，HardwareTrackingNode | onOdometry/onHealth缓存；onGoal→setGoal；onEnable请求零预流与bridge arm；onPx4Status确认模式；onTimer→health→tracker→allocator→publish；onStop归零/请求上锁 | 独立真机任务/执行许可状态；单线程executor序列化。唯一thruster_command发布者，未ARMED+Offboard/定位有效前只允许零预流；重连不自动续跑 |
+| core/tracking/thruster_allocator.h/.cpp，ThrusterAllocator（后续可选物理路线） | configure(r_i,d_i,曲线,限幅)→秩/可达轴报告；allocate(物理力旋量)→各电机N/指令/估计可达力及残差 | 首轮不实施；物理精度确有需要时再标定与设计，不能把请求或模型估计冒充实测 |
+| ros/hardware_tracking_node.h/.cpp，HardwareTrackingNode（需按新主线细化） | onOdometry/onHealth缓存；onGoal→有符号参考；onEnable请求零预流与bridge arm；onPx4Status确认模式；onTimer→health→归一化控制→经验混控→publish；onStop归零/请求上锁 | 独立真机任务/执行许可状态；单线程executor序列化。唯一thruster_command发布者，未ARMED+Offboard/定位有效前只允许零预流；重连不自动续跑；不能直接复用原PlanarTracker的N级输出 |
 | bringup/config/{camera,tank_tags,camera_extrinsics,real_vehicle,real_tracking}.yaml | 相机模型、标签几何、外参、真实推进器/控制配置 | 记录测量来源/单位；实测配置与Hippo配置分开，不提前填假标定 |
 | bringup/launch/{real_sensors,vision_localization,real_state_preview,real_point_tracking}.launch | 纯XML：只读传感器→视觉→状态预览→真机控制逐级启动 | 首批只实现到只读定位；真机控制入口需后续确认。不可include默认core.launch同时又启动自己的分配器，因为前者还会启动原mixer |
 
@@ -524,8 +526,8 @@ USTROV EKF存在延迟输出与协方差导出问题，包装不是自动修复�
 1. **只读硬件核验**：读取OS/ROS/固件与DDS版本、IMU/压力设备。使水压探头产生已知10cm浸深差，淡水应约增加981Pa；检查device_id、单位和压力实例。这不要求移动整个未验密封的机器人，也不启动电机。
 2. **机载相机定位台**：相机刚性安装且暂不启用推进器，缸底固定标签，水缸外贴尺和固定参考点。先空气后最终湿光路；独立记录已知5/10/20cm位移与旋转、中心/边缘和不同高度，统计尺度/静态抖动/延迟/丢标。具体距离受水缸尺寸限制；校准点和验证点分开。
 3. **无动力整机状态**：手动平移/转动、改变深度，比较视觉与融合Odometry。主动遮挡标签/断图验证健康降级；启动/重启不能先用未初始化零位姿建立home。录包回放不发布执行命令。
-4. **推进器台架与分配**：先断动力验证输出通道/解锁/断链，再用水中固定测力装置测正反推力、死区、电压和可达力矩。核实roll反作用力矩是否可用，不能默认Hippo系数适配。
-5. **受限首闭环**：依据实际Fx/Mz等权限选择直线/航向→小幅XY；确认浮力/姿态稳定和离底可视条件。没有Fz权限时，深度计只观测，不能声称定深。运动限幅按测力/净空/定位误差决定，不能直接复制当前仿真0.8m/s。标签丢失/时间异常/断通信→零命令与上锁策略必须实测；零推力不等于立刻静止或定深。
+4. **推进器核验与经验混控**：先断动力验证输出通道/解锁/断链，再用水中固定的单推进器短脉冲确认方向、零点、大致启动死区和停止。核验小幅组合响应及其他轴耦合；不要求先测牛顿级曲线，不假定Hippo的roll反作用力矩系数适配。
+5. **受限首闭环**：先依据实际偏航权限、IMU质量和姿态/浮力条件做小幅机体z角速度PI；视觉有效后做固定航向纵向短程PD，不直接扩大到任意XY。没有Fz权限时，深度计只观测，不能声称定深。运动限幅按实际响应/净空/定位误差决定，不能直接复制当前仿真0.8m/s。标签丢失/时间异常/断通信时的停止策略须实测；零推力不等于立刻静止或定深。以上条目按验证对象分组，实际优先顺序以README§11.12为准。
 
 水缸中心点活动范围需要扣除机体包络、转弯扫掠、定位误差和停止距离。建议先关注几厘米到十几厘米的位移，但尺寸/制动能力未知前不冻结数值。外部同源视觉只是反馈；后续定量控制评价使用独立标尺定位工装或独立标定的第二观测通道。缆绳张力和池壁回流应记入试验条件。
 
@@ -533,10 +535,10 @@ USTROV EKF存在延迟输出与协方差导出问题，包装不是自动修复�
 
 ### 12.8 水缸尺寸对第一阶段的约束（2026-10-06补充）
 
-用户提供1.5×0.5×0.8m，暂按长宽高；0.8m为缸高，实际水深另测。以下是基于旧机体约0.4×0.3m的条件估算，不作为当前真机净空验收：
+2026-10-19用户确认水缸内净长1.35m、宽0.65m，替代此前1.5×0.5m的长宽估计；旧0.8m为缸高描述，实际水深仍需另测。以下是基于旧机体约0.4×0.3m的条件估算，不作为当前真机净空验收：
 
-- 长轴对齐时，若缸宽为净宽0.5m，左右各约0.1m，尚未扣推进器突出、标签、线缆和定位误差。
-- 矩形机体偏航角为theta时，横向包络为 `0.4*abs(sin(theta))+0.3*abs(cos(theta))`。45°时约0.495m，最大值0.5m；完整掉头几乎没有侧向余量。实际圆筒/推进器构型应测真实包络，不能把这个矩形近似当已测几何。
+- 长轴对齐且居中时，按0.65m净宽与0.3m机宽估算，左右各约0.175m，尚未扣推进器突出、标签、线缆和定位误差。
+- 矩形机体偏航角为theta时，横向包络为 `0.4*abs(sin(theta))+0.3*abs(cos(theta))`。45°时约0.495m，最大值0.5m；在0.65m缸宽内若中心固定，最大包络时理论上两侧各约0.075m。不再沿用旧0.5m缸宽下“完整掉头几乎没有余量”的结论；也不据此宣称实际掉头已可行。实际圆筒/推进器构型应测真实包络，不能把这个矩形近似当已测几何。
 - 当前首阶段按用户选择采用机载下视、缸底固定标签；手动沿长轴移动，先验证5/10cm等已知位移。应检查最低离底高度时的近焦、校正后可见范围、窗口折射和姿态歧义。此前缸外优先建议已被替代；下视安装不消除水缸宽度与转向包络限制。
 - 首轮控制目标收窄为纵向低速短程和小角度航向修正，距离/限幅待实测；不直接安排斜向/身后目标或原地180°转向。
 - 现有`PlanarTracker::update()`在制动后以`atan2(delta.y(),delta.x())`设置航向并进入TURNING。虽然允许负Fx制动，仍不等同固定航向倒车规划。若要长轴往返，需要另设计有符号纵向参考、倒推曲线/控制和横向越界终止；不得直接发布负home-X验证倒退。继续遵循先函数设计、确认后编码。
@@ -551,7 +553,7 @@ USTROV EKF存在延迟输出与协方差导出问题，包装不是自动修复�
 - 旧代码是catkin/rospy，`start_localization.launch`串联usb_cam→image_proc→apriltag_ros→ekf_node.py→MAVROS，字典配置在外部apriltag_ros包，不能从此仓库冻结其family。
 - `calibration_tags.py::callback_april()`保存相机看到的标签位置；`callback_gantry()`结合龙门架位置及固定旋转累积世界标签坐标；结束后写CSV。它不是镜头内参标定，作者的calibration_tank.csv不能用于本水缸。
 - `ekf_node.py::callback()`取标签相对位移的范数作为距离观测，并含1.05/1.1经验尺度系数；`ekf_class.py`状态为[x,y,z,机体前向速率]，姿态由另一路更新、角速度用于预测，输出姿态存在仅yaw构造。不能把它称为通用六自由度VIO或直接照搬经验参数。
-- 当前工程采用已知多标签角点的几何位姿观测→独立融合状态。AprilTag36h11作为新方案候选，以便和较新Hippo视觉对齐；OpenCV ArUco字典也可用，但生成/检测/尺寸约定必须一致。标定板建议ChArUco或棋盘格，与运行定位标签可分别选择。
+- 当前工程采用已知多标签角点的几何位姿观测→独立融合状态。使用实物AprilTag36h11；生成/检测/尺寸约定必须一致。2026-10-21明确使用现有16张缸底标签兼作内参标定目标，不再要求独立ChArUco/棋盘格；原棋盘格命令已撤回，C++标定采样/几何配对适配待实现。
 
 三类标定必须区分：
 
@@ -559,11 +561,11 @@ USTROV EKF存在延迟输出与协方差导出问题，包装不是自动修复�
 |---|---|---|
 | 相机内参及畸变 | K(3×3，焦距/主点为像素)、D、图像尺寸、模型名 | 复用OpenCV C++ camera_calibration / interactive calibration / ChArUco示例；若确属fisheye，调用其专用标定与校正API。发行版未必安装示例可执行文件，实施时核版本与构建 |
 | 相机相对机体 | T_BC(平移m、旋转) | 测量刚性安装外参，再用已知姿态/位置工装复核；相机内参软件不会自动给出该外参 |
-| 固定标签地图 | ID、标签尺寸m、各角点W坐标或T_WM | 在平整硬板按已知布局制作并实测，定义W为沿缸长/缸宽/Z向上；压力零点另做高度变换。无需作者龙门架即可建立初版规则地图 |
+| 固定标签地图 | ID、标签尺寸m、各角点W坐标或T_WM | 直接固定在缸底并实测几何，定义W为沿缸长/缸宽/Z向上；压力零点另做高度变换。无需作者龙门架或额外底板即可建立初版地图 |
 
 先固定最终窗口、分辨率、焦距/数字裁切；空气中验证工具链，再在最终水中光路采集不同位置、倾角、距离的标定图像，不能只平行平移一张板。湿标定为工程近似，平面折射不一定能由单一K/D精确描述。用未参与拟合的已知位移、中心/边缘和不同高度验收；RMS重投影误差小不等于水下尺度准确。
 
-水缸板的初始试样可选8cm边长、不同ID的标签，先少量测试，再根据实际离底高度/可用像素布成两排长条地图。例：2×8个、中心间距14cm，图案包络约1.06×0.22m，四周另留白；仅为布局草案，不保证当前镜头能同时看到足够标签。黑色外边长作为所选AprilTag36h11检测尺寸时须和检测库定义一致，外部白边不混入尺寸；打印关闭缩放、实测尺寸、防反光并保持平整。IP66不能证明长期浸水能力，须明确壳体/窗口/出线密封；商品“250–6000mm”不作为镜头焦距，近焦能力需实测。
+水缸板的初始试样可选8cm边长、不同ID的标签，先少量测试，再根据实际离底高度/可用像素布成两排长条地图。例：2×8个、ID0～15、中心间距14cm，黑色图案包络约1.06×0.22m；每片四周各留1cm白边后，100×100mm成品整体排列包络为1.08×0.24m。16个是可放入水缸的草案，不是通过全域可见性计算得到的最少数量；此前6个是初测样品，可纳入最终地图。黑色外边长作为所选AprilTag36h11检测尺寸时须和检测库定义一致，外部白边不混入尺寸；打印关闭缩放、实测尺寸、防反光并保持平整。IP66不能证明长期浸水能力，须明确壳体/窗口/出线密封；商品“250–6000mm”不作为镜头焦距，近焦能力需实测。
 
 首个可运行视觉交付只到Image/CameraInfo→标签角点→T_WB及质量，不接电机。沿用§12.6的CameraGeometry/FiducialLocalizer/Node设计，标定计算调用现成C++库，不另写一套优化器。
 
@@ -594,4 +596,238 @@ STOPPING取得stop接受、停止请求之后的全NaN桥输出和PX4已上锁�
 
 CMake选项ROV_BUILD_PX4_MOTOR_PROBE默认OFF，显式ON才要求px4_msgs并编译硬件工具，避免原仿真环境被硬件依赖阻塞。运行参数采用启动只读策略，区别于原point_tracking的动态参数；不混用两者调参方法。所有回调串行；异步服务future不在executor中同步等待，退出/重试清理挂起请求。
 
-验证顺序：纯C++波形/ROS与实际桥协议测试→真机断动力验链→水中固定推进器短脉冲、方向/死区→测力装置标定正反推力。本批实际编译/运行证据和可执行步骤集中于README§11；没有真机接入、PWM/ESC和水动力验证。原仿真C1/到点实现保持独立入口。
+验证顺序：纯C++波形/ROS与实际桥协议测试→真机断动力验链→水中固定推进器短脉冲、方向/死区→按README§11.12接状态和简单闭环。测力装置标定正反推力改为物理精度确有需要时的可选工作。本批实际编译/运行证据和可执行步骤集中于README§11；没有真机接入、PWM/ESC和水动力验证。原仿真C1/到点实现保持独立入口。
+
+## 13. 机载视觉定位实施计划（2026-10-07设计，待确认实现）
+
+### 13.1 目标、硬件与完成边界
+
+用户选择相机直接浸水，预计镜头离底20～50cm。首批目标：在固定标签覆盖区域，用真实图像输出机体在固定map中的位置/姿态，附采集时间和观测质量；在无动力整机移动时完成独立尺量验证。只有这一目标通过，才进入IMU/压力融合和后续控制。
+
+尚需准备或确认：
+
+| 项目 | 用途与当前条件 |
+|---|---|
+| 相机浸水能力或浸水外壳 | 当前仅用户提供IP66规格；需允许浸深、持续时间和线缆出口密封依据。离底20～50cm不是相机距水面的浸深。若需加外壳，最终窗口一起标定 |
+| 刚性下视支架、线缆固定 | 相机相对base_link位姿固定，线缆不进入视野；固定后量T_BC，不在运行中挪动 |
+| 已知尺寸的标定几何 | 10-21用户明确只有16张AprilTag，直接使用缸底固定标签；测真实ID、码边长、相对位置/有序角点，不要求新增棋盘格或承载板。同一物理目标可同时服务内参标定和地图定位，但求解输入/用途不同 |
+| 固定标签及缸底安装 | 包装36h11、码80mm/外100mm、ID0～16；直接贴缸底，不要求额外底板。用户报告空气中10cm图像可见，尚未检测或湿验证；按实际运行最低高度、倾角和轨迹交接处验收后冻结布局，行列间距可以不同 |
+| 标尺/直角尺、位置挡块或简易刚性导向工装 | 测安装外参和地图，提供已知位移与角度核验。需控制倾斜/偏摆，不能把手持尺读数当高精度运动捕捉真值 |
+| 照明、Pi供电/散热/已有有线通信 | 先使用实验室现有条件；反光/拖影或欠压/过热时针对性改善，不预先采购GPU、DVL或第二相机 |
+
+20、35、50cm作为光学检查点，不保证在50cm离底时整个ROV仍能在0.8m缸高内完全浸没；实际水深、相机位置与机体包络要一起测量。纯视觉定位使用相机和已知标签即可，Pixhawk/IMU/压力在后续融合批次接入。
+
+### 13.2 软件复用与分批交付
+
+采集复用ROS2 `usb_cam`；AprilTag编码检测复用官方原生库，在自研C++类中调用；标定、去畸变与PnP复用OpenCV。自研部分负责参数/地图/坐标变换/质量和ROS输出。先在Linux PC处理录包验证，再在Pi原生Ubuntu/Jazzy构建部署并测负载；WSL用于编译与回放，不把USB设备透传作为首个相机接入前置条件。后续上Pi保持同样接口和标定模式，重新测性能。
+
+| 阶段 | 工作与产出 | 进入下一阶段的依据 |
+|---|---|---|
+| V0 采集核验 | 枚举设备/输出格式/实际帧率、固定一种模式、记录分辨率与曝光策略；20cm近焦检查。依赖版本按实际Jazzy环境固定 | 连续图像、无持续积压，图案清晰；相机物理安装/浸水条件确定 |
+| V1 内参标定 | 10-21已实现§13.10离线适配；lab真实录像已得1280×720候选K/D，ID16、47拟合/13留出，RMS=1.476898/2.213650px，用户本次留出门槛2.3px；详README§13.10 | 候选参数已生成，图像检查不替代独立位移；地图/T_BC/在线链未验收，重新安装窗口/调焦/裁切重核 |
+| V2 地图与外参 | 固定并测量ID/边长/方向/中心或角点；量相机T_BC；建立与压力参考一致的map | 实际尺寸有记录，所有ID唯一；X/Y/Z和旋转方向可手动验证 |
+| V3 几何定位 | 实现CameraGeometry/TagMap/FiducialLocalizer/ROS节点与XML启动；先静态/手动移动的空气图像回放 | 检测ID、角点对应及T_WB正确；单位/外参逆变换与异常帧处理测试通过 |
+| V4 湿光路与整机验收 | 20/35/50cm、中心/边缘、短程平移、小角度转动；遮挡/断图/重连；Pi运行录包 | 报告误差、抖动、有效率/最长丢标、延迟与CPU/温度；圈定实际可用区域 |
+| V5 状态融合设计与实施 | 在真实录包上核验已有USTROV EKF，设计状态输出/协方差/健康与时间契约；输出统一Odometry | 位置、姿态、速度同一时刻，丢标可识别、速度经独立检查，才供真实控制入口使用 |
+
+V0～V4为拟确认的首批视觉实现范围；V5在真实观测具备后细化和确认。标定优化使用官方工具，不另写优化器。未标定时可以检测ID/显示角点，但不得发布冒充米制定位的有效机体位姿。
+
+### 13.3 坐标、接口与数据流
+
+沿用§12.4：W为固定水缸map，X沿缸长、Y沿缸宽且与Z组成右手系，Z向上，不强行对应地理东/北；以建立地图时的水面高度作z=0，标签板z=-H，H需实测并记录参考水位。B为uuv00/base_link，FLU；C为uuv00/camera_optical_frame，右/下/前。长度m、图像坐标px、内部角度rad。
+
+多标签PnP输入世界角点P_W与图像点u,v，求解的T_CW将世界点变到相机系，因此 `T_WB=inverse(T_CW)*inverse(T_BC)`。先核已知合成几何及角点顺序，再接真实图像；不能直接把PnP的tvec当机体世界位置。标签全部共面时使用适用平面多点的方法并检查候选解；四点正方形专用IPPE_SQUARE不能直接用于整张多标签地图。
+
+~~~text
+usb_cam：Image + 同步CameraInfo
+  → CameraGeometry::configure/rectify：校正灰度图 + K_rect
+  → FiducialLocalizer::detect：AprilTag ID + 四角像素
+  → TagMap::collectWorldCorners：对应的已知世界角点
+  → FiducialLocalizer::estimateBodyPose：多点PnP → T_CW → T_WB
+  → checkQuality：匹配/重投影/正深度/歧义/跳变与图像年龄
+  → PoseWithCovarianceStamped + Diagnostics + 可选叠加图/RViz地图
+  → rosbag：输入、输出、观测拒绝原因和耗时
+~~~
+
+| 拟定话题 | 类型与语义 |
+|---|---|
+| /uuv00/camera/image_raw、camera_info | sensor_msgs/Image、CameraInfo；同一图像模式与时间，K/D对应输入图；未标定标明缺失 |
+| /uuv00/vision_pose | geometry_msgs/PoseWithCovarianceStamped；header.frame_id=map，内容固定为base_link位姿，stamp继承图像时间。无child_frame_id，因此该约定写入接口文档 |
+| /uuv00/vision/diagnostics | diagnostic_msgs/DiagnosticArray；初始化/有效/丢标/歧义原因、有效ID数、像素误差、处理耗时、最后有效图像年龄 |
+| /uuv00/vision/debug_image、tag_map | sensor_msgs/Image、visualization_msgs/MarkerArray；调试图按需低频，地图供RViz查看 |
+
+视觉不发布速度为零的Odometry；后续融合入口输出的Odometry必须满足当前StateAdapter：map中的pose、机体系linear/angular twist。第一批只发布Pose及显示数据，后续由唯一融合节点拥有map→base_link动态TF，避免多源TF冲突。
+
+PoseObservation包含stamp_ns、p_W[3]、q_WB[4]、covariance[6×6]、tag_count、reprojection_error_px、processing_ms、valid/reason及协方差来源标记。TagGeometry保存ID、边长m、四角P_W；CameraModel保存model、image_size、K/D及输出K_rect。ROS协方差平移单位m²、角度rad²；前期用保守可配置观测噪声并标记为假设，结合独立湿光路误差修订，不能写全零并宣称高精度，也不能只用重投影残差代表水下系统偏差。
+
+### 13.4 在线视觉候选文件、函数与状态所有权（离线子集见§13.10）
+
+2026-10-21复用范围澄清：下表是功能分层候选，不代表这些功能都应重写。用户要求基于Hippo/USTROV增量开发，先核上游可复用组件，再落地缺口。本地USTROV b1208e5有include外部visual_localization的launch入口，但其源码包不在该工作区；Hippo官方文档已提供image_decoder/rectifier/apriltag_node/vision_ekf链和calibration.launch.py。上游标定launch包装标准ROS棋盘格标定器，不能直接用于现有AprilTag录像。后续在线图像/检测优先使用匹配版本的现成组件，位姿/质量/融合仅在坐标、接口或C++要求确有缺口时补；不并行运行两套检测器，也不将离线工具存在作为整套视觉自研的理由。
+
+`rov_localization`为单独ament_cmake包：库使用C++/OpenCV/Eigen/AprilTag，ROS节点使用rclcpp/cv_bridge/image_transport；控制核心不引入图像依赖。所有自研源码沿用.h/.cpp、详细中文注释及现有clang-format。
+
+| 文件（位于ROV_Control/src） | 类/函数及输入→输出 | 持有状态/调用关系 |
+|---|---|---|
+| rov_localization/include/rov_localization/vision_types.h | CameraModel、TagGeometry、TagDetection、PoseObservation；明确像素/米/旋转/协方差约定 | 纯数据，无ROS订阅和时钟 |
+| rov_localization/include/rov_localization/camera_geometry.h、src/camera_geometry.cpp | CameraGeometry::configure(CameraModel)生成映射；rectify(image)返回灰度校正图/K_rect | 缓存不可变模型和映射；针孔/fisheye分支按真实标定配置。更换图像模式需重新配置，不每帧重建 |
+| rov_localization/include/rov_localization/tag_map.h、src/tag_map.cpp | TagMap::loadYaml(path)加载/校验；collectWorldCorners(detections)返回配对P_W/像素及ID | 持有只读ID到四角的映射；统一AprilTag角点编号，未知/重复ID和坏几何不用于位姿 |
+| rov_localization/include/rov_localization/fiducial_localizer.h、src/fiducial_localizer.cpp（按上游缺口决定新增范围） | 候选configure/detect/estimateBodyPose/checkQuality/reset职责；先评估Hippo现有图像/检测输出能否直接使用，必要时只适配地图/坐标/质量接口 | 在线检测来源唯一；可消费现成检测结果，或在确需原图四角时复用库，不能同时重复检测。上一接受观测仅成功时更新；时间倒退/长丢标清历史 |
+| rov_localization/include/rov_localization/fiducial_localization_node.h、src/fiducial_localization_node.cpp | loadConfig()；onCameraFrame(Image,CameraInfo)同步输入→校正→检测→求解→门控；publishPose()；publishDiagnostics()；publishDebug()/publishMap()；onDiagnosticsTimer()检查断图 | 节点持有上述类和计数/时间，单线程executor串行修改；错误帧只输出原因，只有有效解发布新pose |
+| rov_localization/src/localization_main.cpp | init→构造→spin→shutdown | 不再封装算法；相机驱动和定位各为独立进程 |
+| rov_localization/CMakeLists.txt、package.xml | 构建/依赖/安装、正式测试入口 | 显式依赖版本，不把机器上的隐式依赖当可复现环境 |
+| rov_localization/test/test_fiducial_geometry.cpp、test_localization_interfaces.cpp | 已知位姿投影/角点顺序/外参逆变换；帧和标定不匹配、断图/乱序、重放后输出 | 正式C++验证，测试几何不等于水下视觉仿真或硬件精度验收；真实图像另走录包回放 |
+| rov_bringup/config/camera.yaml、camera_calibration.yaml | 设备/输出模式；测得的模型/K/D/图像尺寸 | 正式标定文件待数据产生，不提前填写假K/D。来源、日期、窗口/输出模式写入配置注释 |
+| rov_bringup/config/tank_tags.yaml、camera_extrinsics.yaml、vision_localization.yaml | 标签ID/实际几何；T_BC；检测/质量/调试开关 | 标定几何启动只读；阈值来自试验选择，参数入口检查，避免每帧反复校验固定配置 |
+| rov_bringup/launch/camera.launch、vision_localization.launch；rviz/vision_localization.rviz | XML启动现成采集器和自研定位、只读显示，参数按车辆名组织 | 不启动fake_vision、fake_state_estimator或执行器发布者；避免真/假位姿同名混合 |
+
+直接调用AprilTag原生库的原因是需要四角像素统一参与地图PnP；不自己写标签解码，也不同时再启动apriltag_ros重复检测。官方apriltag_ros保留为接口/对照参考。最初允许单标签检测/求解检查，多标签作为覆盖目标；有效位姿需通过平面歧义检查，不能认为看见两张共面标签就自动消除歧义。最少标签数、重投影阈值等通过初测确定和记录，不把任意经验值伪装理论条件。
+
+### 13.5 运行时、时间与初始化
+
+图像到达触发计算，不用50Hz定时器重复处理旧图。输入使用同步图像/CameraInfo，队列有界、最新帧优先；过载时丢旧帧并报告年龄，不累积长延迟。CameraModel在首个有效Info到来时建立；尺寸/模型与配置不符时停止有效pose输出，显式修正后重启。
+
+初始状态WAIT_CAMERA/CALIBRATION，第一批不建立任务home。成功观测进入TRACKING；看不到标签、歧义或无图时输出诊断，旧pose不重打时间戳。新图像恢复后重新接受几何/时间一致的解；长中断清除上一位姿连续性约束，再定位不隐式改变地图或未来控制任务home。
+
+姿态和位置继承图像采样时间；处理耗时与无图看门狗使用steady_clock。USB驱动时间戳含义要核验，未证实硬件曝光时间时报告为驱动时间，不称硬件同步。真机use_sim_time=false；离线rosbag回放可显式用仿真时间重现采样间隔，但绝不接执行输出。
+
+单线程executor保证节点状态串行；AprilTag可有内部检测线程，但不允许它们直接改ROS节点状态。诊断定时器仅检查/发布健康信息，不生成新定位。目标处理频率先按约15～20Hz评估，选择设备支持的分辨率，再测Pi端到端延迟；20Hz是设计目标，不是已实测性能。
+
+### 13.6 验收与后续接控制的边界
+
+每个实际可用高度，在中心、近边缘及标签交接位置静止录制，再沿有刻度工装移动5/10cm；检查已知位置偏差、静止标准差、轴向/尺度、航向变化、可见标签数、误差分布、最长丢标及延迟。校准数据和验收位置分开；手持移动只检查方向，精度结论需固定参考。记录actual working envelope，不以16个标签证明全缸覆盖。
+
+可将水平绝对误差约1cm以内、静止标准差约5mm以内、航向约2°以内、图像到pose延迟P95约100ms以内作为首轮低速试验的讨论目标；这是待确认/实测的工程预算，不是相机承诺或已有结果，也不能只达到P95就忽略长尾中断。以0.05m/s为例，100ms延迟对应约5mm位移，后续控制速度/允许误差须据此一起选择。
+
+遮挡标签、断开图像、重复/倒退时间戳、错误CameraInfo、未知ID时，确认没有持续伪新定位；恢复后检查绝对地图定位与跳变。平面位姿翻转或湿光路尺度偏差不能靠低通滤波隐藏；先改观测模型、工作区域或安装/照明。当前无DVL不阻止已知标签可见时的定位，但标签完全丢失后不能宣称长时间准确水平定位。
+
+后续融合候选复用USTROV C++ Ekf。已有Estimator::OnVision只复制数值、没有坐标变换；PublishPose协方差仍TODO，IMU超时复位也未实现，不能直接rename话题就交给控制器。RealStateNode的详细接口和速度/协方差输出在V5确认，最终满足StateAdapter的map/FLU/时间契约。现有PointTrackingNode仍限制仿真时间，真机另按README§11.12固定航向短程路线接入；不在本视觉批次直接启动它。
+
+10-07此处为完整视觉设计；10-21经用户确认只实施§13.10离线标定子集，构建/8项测试结果见README§13.8。在线相机、定位、地图、滤波等依Hippo复用缺口后续确认，未自动展开V0～V4；真实图像/米制验收仍需设备与录像。
+
+### 13.7 AprilTag直接贴缸底：间距与成像条件（2026-10-19）
+
+用户明确选择不加独立底板，标签直接固定到缸底。此前1200×350mm底板和140mm中心距只是未验证的施工示例，已被本方案替代；35cm板宽来自24cm两排标签包络加两侧各5.5cm施工余量，没有成像最优性依据。用户补充的“10cm离底能看见角点”已澄清为空气中图像可见，未运行检测、未验证水下，不等于已输出稳定ID、角点或位姿。原20～50cm为计划工作区间，若实际要在10cm运行，则将10cm纳入湿验证。
+
+包装标注36h11、ID0～16、外尺寸100×100mm、码尺寸80×80mm；10-21用户明确实际现有16张，实际ID集合仍需识别记录，不再推定第17张或ID16必为备用。最终行列和间距按实测视野决定。相机内参与运行地图是不同数据，同一组标签可兼作两者的目标；不要求额外承载板，也不要求固定网格节距，X列间距与Y行间距可以不同。
+
+**相机和算法要求分层：**
+
+- 图像容纳图案：只证明在该高度/姿态能看到，不保证解码成功。应保留完整编码、黑框及周围可辨白边，避免裁切、遮挡、反光、失焦和运动模糊；最低高度侧重视野，最高高度/最大倾角侧重有效像素与清晰度。
+- 检测：正确36h11字典，软件持续输出正确ID和同一标签有序四角；不能把零散可见的不同标签角点当作已完成解码。没有适用于所有镜头/曝光/分辨率的统一最小像素数或角度阈值，按正式图像模式实测检测率与最长丢检时间。
+- 位姿：一个已知尺寸的完整标签、相机内参/畸变模型及其有序角点可以用于位姿求解，仍需处理平面解歧义和误差。不要求同屏16个或固定至少两个标签；多个有良好空间分布的完整标签用于冗余/改善约束，不是无条件精度保证。固定map定位还需实测标签位置/方向，机体位姿另需T_BC。
+- 运动连续性：对计划经过的区域、实际高度与倾角检查标签交接；若全部标签丢失，该帧没有直接标签位置观测，IMU短时预测不等同持续绝对定位。定位误差用独立已知位移检验，不能只看ID成功率或重投影误差。
+
+**间距的简化几何检查（本项目推导，非厂家指标）：** 用完整成品宽a=10cm作保守覆盖尺寸，外边净隙g，中心距d=a+g。相机正下视、图像轴与网格对齐、沿相邻标签中心连线移动时，在两标签中点要让相邻两张完整进入视野，需要该方向有效地面视野F≥2a+g；这也使一维相邻“至少一张完整”的可见区间衔接。有效F应剔除不清晰/校正裁切边缘，实际还须留余量；这不保证整个运动区始终同时有两张标签。二维网格分别检查F_x、F_y，并另验实际边界、偏航/俯仰/横滚。g=4/6/10cm时，对应几何下限F=24/26/30cm，不能用空气中120°商品视角代替湿光路实测。
+
+物理容纳另算：沿135cm长边放8张10cm成品，排长=80+7g cm。不留端部余量时g≤55/7≈7.86cm；g=6cm排长122cm，居中端距各6.5cm，g=8cm排长136cm已放不下。两排横向间距可以另外增大，但可见性仍须单独验证；不把上述尺寸可容纳当作检测通过。
+
+**直接安装与测量：**
+
+1. 选一个固定缸底内角为施工参考P，X沿135cm长边、Y沿65cm短边、Z向上。在标签之外做可清除的测量基线；以实际ID记录，不以包装顺序代替ID。先用少量标签临时摆设，记录候选g_x/g_y。
+2. 在最终图像分辨率、裁切/去畸变设置下，测实际工作高度的有效地面视野；先空气检查工具链，再用最终湿光路验证。把相机放在标签正上方、两标签中间和四标签之间，横纵移动并施加预期倾角，记录正确ID、完整角点、丢检和延迟。最低和最高运行高度都检查。
+3. 根据标签与玻璃/缸底材料选可长期浸水的粘接方式，按产品要求干燥施工/固化；保持平整、不移位、无气泡翘边和完整白边，胶不覆盖图案，不撕破本体防水层。运输包装及遮挡纸签移除。相机浸水能力仍按最终装置单独确认。
+4. 固定后复测每张边长、中心或四角、方向和标签表面高度，形成后续tank_tags.yaml输入。图案朝向统一仅方便施工，仍核对检测器角点顺序，不把全部标签旋转默认写成单位阵。没有独立底板时不再沿用旧板角坐标。
+5. P用于测量，不自动等同任务home。若W的XY原点/轴与P对齐，W的z=0为建图参考水面，则标签平面z_W=-H，H量到实际标签表面；否则显式记录T_WP。标签移位后重新测量地图。
+
+本节为布置/几何设计；10-21另已实现离线适配并用合成数据验证，尚未处理实际湿录像或完成米制定位。官方依据（阅读相关正文，非新增论文证据）：[AprilTag检测/位姿](https://github.com/AprilRobotics/apriltag#pose-estimation)、[OpenCV Board](https://docs.opencv.org/4.x/db/da9/tutorial_aruco_board_detection.html)、[OpenCV PnP](https://docs.opencv.org/4.x/d5/d1f/calib3d_solvePnP.html)。
+
+### 13.8 官方C++示例的ID、角点与朝向检查（2026-10-19）
+
+用户确认测试设备为有桌面的Ubuntu电脑，相机直连该电脑；不把WSL USB透传或Pi无桌面显示作为此步前提。复用官方example/opencv_demo.cc，运行命令和每项含义集中README§12。此步无需K/D或标签米制边长，仅检查检测，不创建本项目实现代码。
+
+已阅读示例main函数：getopt_parse取得-c相机索引、-f字典、-x降采样参数→VideoCapture打开相机→tag36h11_create创建字典→apriltag_detector_add_family注册→循环cap>>frame取得图像→cvtColor转灰度→image_u8_t引用图像内存→apriltag_detector_detect返回各检测→det->id用于屏幕文字、det->p[4][2]为四角像素→line/putText画参考边和ID→imshow显示→每帧销毁detections。示例不读地图、不求相机/机体米制位姿，也不输出本工程ROS消息。仅人工预览，不自带项目验收用的逐帧统计/日志。
+
+官方quick_decode_codeword会检查四个90°编码旋转并返回匹配ID/rotation；正常面内旋转不改变物理标签的ID。有序角点依据编码规范方向，不等于每帧图像几何上的左上角。示例绿边p0→p1、红边p0→p3，红绿交点为p0。固定相机观察同一张旋转时可验证ID不变，p0仍跟随同一物理角，不能以彩色边仍在画面某一侧作为要求。
+
+地图要求实际ID、尺寸和角点/姿态相互一致。当前一ID只映射一个物理位置，ID相邻与空间相邻没有强制关系。可在图案/完整白边之外或背面标记解出的数字和参考方向。安装可旋转任意角度；若中心不动而图案转90°，T_WM旋转或有序世界角点也必须相应改变。最易测量的做法是把每张解码后的同一参考边对齐同一缸边，或直接量四个有序角点；不能凭不同图案的外观猜规范“上方”。
+
+首步人工检查：每张单独识别并清点→面内旋转四方向检查同ID→少量标签交接/高度/倾角检查。用户随后提供多张标签带数字ID和彩色四边形的运行截图，证明该帧检测成功；图中具体拍摄高度、完整ID清点、连续性和湿光路未经验证。正式成功率/最长丢检、时间与湿光路定位精度仍需后续实现和实测。当前有官方工具的用户运行截图，没有自研定位运行或精度验收结果。
+
+### 13.9 使用现有AprilTag湿标定与地图实测的数据契约（2026-10-21修正）
+
+具体现场步骤/命令集中README§13。用户明确只有16张AprilTag，无棋盘格；本节撤回10-20独立棋盘格路线，以现有标签兼作标定目标。10-21已确认并实施§13.10离线适配，不填假参数；无需另打印/购买或给棋盘格做防水。完整地图/在线定位仍待后续。
+
+复用FFmpeg V4L2保留原始MJPEG录像（仅设备支持模式时用-c:v copy），原生AprilTag检测提供真实ID和有序像素角点，再调用OpenCV C++标定接口；单标签采样/配对/保存已在§13.10实现。opencv_demo仅检测，旧opencv_interactive-calibration -t=chessboard命令不用于此流程；缺少defaultConfig.xml会回退默认参数，不是该错误目标类型的修复入口。
+
+起步内参路线使用选定的同一真实ID：以实测黑框宽高构造标签局部Z=0四角，多位置/尺度/俯仰/横滚观测逐帧生成objectPoints/imagePoints。无需先测16张缸底位置、间距、水深或每帧相机姿态；每帧四点的冗余较少，视角/边缘覆盖与独立验证不足时不得仅凭低残差验收。联合多标签是后续可替换输入：需提供各ID在同一目标系中的实测角点，不能将不同标签各自原点的四角直接拼为一块目标；不同帧可见不同标签子集，不必全16张入画或重排标准AprilGrid。完整map测量单独服务运行定位，不作为单标签内参的前置门槛。
+
+10-21已有用户录制日志：/dev/video3、MJPEG、1280×720、30fps、wet_01.mkv约2分13.5秒；用户确认最终湿光路且改变了俯仰/横滚/高度。用户报告单格10mm，并进一步确认检测外框宽高均80mm（0.080m），不将内部编码格当棋盘格角点。先复用录像筛选，不因旧工具没输出而要求重拍；尚未读取视频内容验证采样质量。
+
+数据分别保存：原始视频与相机/标签目标/湿光路记录；模型/K/D/实际图像尺寸/采样与误差；手工实测ID/码边长/有序目标角点；相机刚性安装后独立测量的T_BC。目标长度统一m，K焦距/主点单位px，D依模型。拟CameraModel适配显式处理字段/模型；无数据不写占位参数。
+
+地图沿用§13.3固定W，XY从固定缸底角P投影，Z零点为建图参考水面标记，标签表面z=-H；水位变化不隐式改地图。内参目标可直接选标签局部系、Z=0，无需预先求出它与W的关系；联合已测目标也用Z=0的平面坐标初始化，不能把未经转换的z=-H点直接当普通零平面初始化输入。角点按编码规范排序；贴正可由中心±半边长构造后排序，斜贴显式旋转或实测角点。几何来自独立尺量，不从尚未标定的视觉位姿生成“真值”反标自身。
+
+验证分开：重投影误差核图像拟合，留出数据及独立50/100mm位移核方向/尺度/高度与边缘系统误差；相机刚性固定到机体后再用T_BC验证base_link位姿。当前opencv_demo没有这一步米制输出，拟定位节点仍未实现。平面水界面非严格针孔，首版湿标定是限定工作范围内的工程近似，不能承诺所有距离/边缘精度。
+
+### 13.10 单标签录像离线标定工具：已确认设计与实现（2026-10-21）
+
+**目标与复用。** 从已有wet_01.mkv选一个ID的多视角观测，使用已确认的80×80mm求相机内参候选并输出可追溯报告。复用AprilRobotics tag36h11检测、OpenCV视频/标定/FileStorage；自研C++17薄封装、选样和报告。沿用已有规划的rov_localization包；本批不创建定位/融合/相机ROS节点，不接USTROV、控制核心、PX4、推进器或Gazebo，不测完整map或T_BC。
+
+**已有功能核对。** 本地USTROV b1208e5的top_lemniscate_demo_offboard.launch.py include外部visual_localization/top_localization.launch.py，但本地无该package.xml；fake_vision.cpp从ground_truth/odometry复制pose并延迟发布，不处理真实图像。Hippo官方Camera Calibration文档明确calibration.launch.py使用标准ROS棋盘格标定器，无法直接处理当前tag36h11录像。当前增量是原生检测输出到OpenCV标定输入的离线适配，最终复用清单优先于上一条完整新包目录；不需要先完成在线定位/融合工程才算K/D。录像先检测/选样，不承诺无需补拍。
+
+**构建选择。** 沿用rov_control_core/CMakeLists.txt已有模式，ROV_LOCALIZATION_WITH_AMENT默认ON供colcon，设OFF可用普通CMake在桌面Ubuntu构建，不要求该电脑安装ROS。当前库仅OpenCV/AprilTag依赖。AprilTagDetector只封装本次离线调用；后续在线定位优先复用Hippo现成图像/检测组件，此类是否复用按真实缺口决定，不强制另写完整在线检测链。
+
+| 已新增文件（相对ROV_Control/src/rov_localization） | 职责、输入输出/状态 |
+|---|---|
+| CMakeLists.txt、package.xml | 构建纯C++库/calibrate_camera、可选ament导出、正式CTest入口；记录实际依赖版本 |
+| include/rov_localization/vision_types.h | TagDetection、CalibrationOptions、CalibrationView、CalibrationResult纯数据；无ROS类型/线程 |
+| include/rov_localization/apriltag_detector.h、src/apriltag_detector.cpp | AprilTagDetector拥有官方family/detector，灰度图→真实ID/有序像素角点/解码信息；不求位姿、不需K/D |
+| include/rov_localization/camera_calibrator.h、src/camera_calibrator.cpp | CameraCalibrator持有本次配置、候选观测、选定帧、结果/诊断；负责下表流程 |
+| src/calibrate_camera_main.cpp | 解析视频/配置/新结果目录，构造校准器并run，打印路径与退出码；无优化公式 |
+| config/calibration_options.yaml | tag36h11、width_m=height_m=0.080、自动/指定ID、选样/质量/覆盖与模型/求解选项；不写假K/D。FileStorage输入说明其YAML头要求 |
+| test/test_camera_calibration.cpp | 正式C++几何/角点旋转/合成投影恢复/退化与错误输入/不覆盖输出测试；不把合成测试叫水中精度验证 |
+
+**数据契约。** TagDetection含id、corners_px[4]、hamming、decision_margin。直接复制原生det->p[0..3]，不按图像左上角重排；decision_margin是解码信息，不当角点协方差。CalibrationView含frame_index、video_time_s/来源、id、原图尺寸、四角px、中心/面积/四边形形状与清晰度；时间仅用于去密集重复，不当曝光时间/控制dt。候选数量有界，不缓存整段视频。Options持有路径、80mm宽高、目标ID与所有筛选/求解配置，入口统一检查。Result含model、image_size、K/D、逐帧目标→相机外参、RMS/逐帧误差/覆盖诊断、ID/帧号、依赖版本和候选状态。
+
+K为3×3，fx/fy/cx/cy单位px；首版明确采用pinhole模型，D顺序k1,k2,p1,p2,k3，不因120°宣传强行称鱼眼。角点/每帧tvec单位m、rvec单位rad。标签局部系L以码中心为原点，按官方H与p[0..3]映射到(-w/2,+h/2,0)、(+w/2,+h/2,0)、(+w/2,-h/2,0)、(-w/2,-h/2,0)，w=h=0.080m。该轴随编码规范定义，绝不随图像上下改变。L与逐帧外参不是home、map或T_BC，内参不需先量L→map。
+
+| 类/函数 | 输入 → 输出 | 状态、调用关系与失败边界 |
+|---|---|---|
+| main / loadOptions | CLI路径、YAML → Options或具体错误 | 核文件可读、宽高/选值合法、结果目录不存在；原视频只读、拒绝覆盖旧结果 |
+| AprilTagDetector::configure / detect | 配置 / 原尺寸8位灰度图 → detections | 创建/析构官方资源，复制检测结果再释放；不预先用未知K去畸变，不自写解码或无解释二次角点修正 |
+| CameraCalibrator::run | Options → Result/失败报告与退出码 | 清空本次计数/候选，按扫描→选ID→选帧→求解→检查→保存顺序调用 |
+| scanVideo | 视频路径、检测器 → 按ID候选、逐帧/拒绝统计 | VideoCapture顺序读取；实际尺寸固定，变化即报错；记录帧号/时间来源。CAP_PROP_FRAME_COUNT可能估算，差异仅记录告警，不能据此判损坏。read=false的EOF/解码错误区分限制显式报告；坏检测跳过并记原因 |
+| selectTargetId | 候选组、自动/指定ID → 一个ID或不足原因 | 自动按有效二维覆盖/尺度变化、数量与ID作确定性排序；指定ID不替换。同帧重复ID不拼接；不能因样本不足偷偷把未知几何多标签合并 |
+| selectViews | 选定ID观测与配置 → 拟合/留出帧、覆盖报告 | 核清晰/完整/几何、中心/尺度/形状差异与密集重复；二维形状只作多样性代理，无K时不声称已测真实倾角。约20～30个不同清晰视角为起步目标，非数学下限/精度承诺；按片段/视角分组留出，不随机拆相邻帧充当独立验收 |
+| makeObjectPoints / solveIntrinsics | 宽高、对应像素 → L四角、K/D、逐帧外参 | 同一L四角用于各帧，cv::calibrateCamera联合求内参与每帧外参；明确pinhole及flags。首版不自动切模型或把fisheye D混入 |
+| evaluateResult | 结果、拟合/留出组 → 数值/覆盖/退化诊断、逐帧px误差 | 核参数有限、正焦距、样本与求解状态；projectPoints核残差。留出组仅求外参，不回调K/D；报告单一正视/尺度、边缘覆盖不足、系统残差等。低重投影误差不等于厘米精度 |
+| saveResult | 数值有效候选、诊断、新目录 → XML/报告/CSV | camera_wet.xml写模型/K/D/尺寸/来源/候选状态，非直接CameraInfo文件；calibration_report.yaml记录统计/拒绝/质量；selected_views.csv记录ID/帧/误差。不足/失败只写原因，不造参数；写盘失败报错，不覆盖旧数据 |
+
+**运行与状态所有权。** 单个离线进程、一个顺序控制流程。每次读到视频帧触发检测，扫描结束后选样并求解；无ROS回调/定时器/topic/service。原生检测器内部工作线程可配置，但detect同步等待、结果复制后进入下一帧。CameraCalibrator独占候选/结果，无跨回调共享状态；构造/run开始初始化本次状态，每次新运行重新开始，无热加载。耗时用steady_clock，视频时间不当控制时钟。
+
+**输出/维护。** 新结果目录建议~/vision_data/calibration_wet_01/results_01/，已有wet_01.mkv保持只读。配置与正式源码/测试入Git，原始视频/参数试验结果/CSV在工作区外数据目录，构建/log按既有规则忽略。只更新README和本设计，不新增重复阶段.md。真实测得K/D以后显式转换到ROS CameraInfo/运行配置；不通过改后缀或frame字符串冒充适配。
+
+**验证顺序与边界。** 已用已知K/D和多倾角合成投影核角点/拟合/退化拒绝，再用真实36h11图案旋转核ID/p序，正式测试保留。lab随后实际处理了原视频并提供候选XML/报告/CSV，结果见README§13.10；本机未读取原视频，不把候选XML当水中定位验收通过。候选参数还需独立50/100mm尺量位移及不同高度/边缘验证，必要时增加已测小片多标签或评估模型。map/T_BC和只读定位在之后批次。
+
+用户随后明确“继续执行”，本节范围已授权并实现。真实使用与软件验证结果集中README§13.8；在线视觉各节点仍是候选设计，未自动扩展实施。新增源代码经过clang-format，详细中文注释；没有修改USTROV或控制链。
+
+实现细化：CameraCalibrator::describeView从图像提取完整性/最小边/清晰度/二维特征；scanVideo使用固定种子有界蓄水池，按帧号/文件FPS抽样并记录后端/EOF限制。selectViews使用特征空间最远点贪心，再按时间组留出，未将随机相邻帧拆分冒充独立验收。所有试验选值在YAML，读取时逐项要求字段存在并校验；min_fit_views至少10，支撑两组各至少5视角的焦距检查，默认20/5不是理论保证。
+
+兼容修订：Ubuntu24.04的AprilTag3.3.0包CMake导出含错误路径，优先pkg-config、缺.pc时回退原生CONFIG，头目录显式查找；测试按需链接Debian单独的apriltag-utils。OpenCV4.6 calibration.cpp计算标准差使用total_points-nparams，在每帧四点时为负并返回NaN，而已知投影K/D恢复正确；本工具不依赖该标准差。evaluateResult新增内部checkFocalStability：拟合视角交替拆两组，各调用cv::calibrateCamera，与全组fx/fy比较，取最大相对变化对照YAML的max_relative_focal_change；这是子集一致性，不是统计不确定度。其余法线、留出残差、径向折返检查保留。没有新增优化器或修改系统库。
+
+0.1.1（r2）实际报告驱动修复：首轮lab报告4002帧/容器4006帧，旧scanVideo提前误判，CSV仅表头，尚未选帧/求解。依据OpenCV4.6 FFmpeg get_total_frames源码，将元数据差异改为诊断：ScanStatistics保存signed frame_count_difference与frame_count_warning，saveResult记录tool_version，eof_limit覆盖有元数据时也不能区分结束原因。修复本身没有改选样/求解/质量选值；新增临时AVI15帧/元数据19帧回归，共9项测试通过。lab已重跑并生成候选参数；用户随后单独将本次实验留出门槛从2.0改为2.3px，完整结果见README§13.10。其状态为candidate_requires_metric_validation，尚无地图/T_BC或独立米制验收。
+
+### 13.11 单标签只读位姿实验：确认范围与函数设计（2026-11-02）
+
+用户在前一轮最小工具说明后明确“直接开始改”，本批实施录像/桌面USB采集→已有检测→固定内参PnP→相机在标签系位姿→显示/CSV。复用AprilTagDetector、OpenCV采集/IPPE/LM/投影；不另写检测器/优化器。只做实验必要通路，不新增地图、融合器、ROS图像节点、控制发布器或通用插件框架；USTROV和执行器链保持原样。后续ROS集成可复用本批数学类，但属于另批。
+
+| 文件/函数 | 输入→输出 | 内部状态与调用/边界 |
+|---|---|---|
+| tag_pose_estimator.h：CameraModel、TagPoseOptions、TagPoseEstimate | K/D/尺寸/候选状态；实验选值；has_pose/valid/ambiguous/reason、T_CL、p_LC/R_LC/RPY/误差 | 单位在字段后缀；无ROS类型。has_pose只代表有候选，不能代替valid |
+| tag_pose_estimator.cpp：loadCameraModel(path) | 原camera_wet.xml→CameraModel | 只读；核pinhole/plumb_bob五参数、尺寸/K/D数值，不重新标定 |
+| loadTagPoseOptions(path) / validateOptions | tag_pose_options.yaml→选值 | 入口核尺寸/ID/解码/误差/帧率；不逐帧重复检查固定参数 |
+| TagPoseEstimator构造 / camera / options | 模型与选值→只读求解器/访问器 | 深复制K/D，持有固定模型与选值，无历史位姿或滤波状态 |
+| objectPoints() | 80mm宽高→L四角 | p0(-w/2,+h/2)、p1(+,+)、p2(+,-)、p3(-,-)，Z=0；沿用标定规范 |
+| estimate(detections) | 本帧原生ID/四角→TagPoseEstimate | 只接指定ID，拒绝同帧重复ID/坏角/小边/解码超限；局部变量保存两解和细化结果，丢检不补上一帧 |
+| evaluateCandidate / rotationDifferenceDeg | 某候选外参/实测角点/K/D→正深度与RMS/两解旋转角差 | solvePnPGeneric(IPPE)两个平面解分别RefineLM；只采纳正深度且原图误差不增加的细化结果；K/D固定 |
+| estimate内坐标变换 | 最佳T_CL→p_LC=-R_CL^T*t_CL、R_LC=R_CL^T | L标签局部、C光学右下前；abs(p_LC.z)为到平面距离。RPY仅显示，完整旋转保留 |
+| tag_pose_preview_main.cpp：main / runPreview | CLI输入/新目录→进程退出码和实验结果 | 一个顺序循环独占VideoCapture、AprilTagDetector、求解器、CSV/计数；USB或视频二选一，首帧/每帧尺寸核对 |
+| writePoseRow | 时间/检测/本帧结果→每帧CSV | 所有读入帧记录valid/reason，失败无候选时写nan；保留候选、角点与R_LC供复查，不把失败候选当测量 |
+| showPose | 原图/结果/K/D→角点编号/XYZ轴/数值窗口 | X红/Y绿/Z蓝；未校正图配原D，不二次去畸变。ASCII叠字、中文终端 |
+| onInterrupt / runPreview退出 | q/Esc或SIGINT→结束循环/释放并保存 | signal只置sig_atomic_t标志，主线程落盘。run_info记录来源/实际ID/选值/帧数/停止原因；输出新目录拒绝覆盖 |
+| config/tag_pose_options.yaml | 实测边长/ID/可调实验筛选→启动配置 | 默认ID16/80mm；改后重启，不热加载。实际命令行覆盖ID另记run_info |
+| test/test_tag_pose.cpp、CMakeLists/package.xml | 正式几何/图案/CLI测试、构建/安装→软件证据 | 新增9项定位测试及原9项标定回归；版本0.2.0，GUI只链接预览入口，几何库不依赖highgui |
+
+**采样/状态。** read成功的一帧触发一次detect和estimate，顺序计算、写行、显示；无ROS定时器/回调/额外控制线程。detect内部线程同步等待返回。视频time_s由帧号/文件FPS，相机为read返回后steady_clock相对首帧；都不是曝光时间或控制时钟。本批不计算速度/控制dt。processing_ms不含采集等待、GUI和落盘。进程每次构造初始化状态，不存在位置归零服务或跨ID自动home。
+
+**假设/验证。** 标签固定且80mm几何可信，原图模式/光路与XML一致；L不是ENU/NED、map或机体。平面两解误差差<=0.15px且旋转差>=5°则valid=false/ambiguous_pose，选值只是启发式而非可观测性保证，不借历史滤波隐藏翻转。独立50/100mm水平位移、高度和静止记录验证后再评估地图/T_BC/ROS状态。前一轮K/D与本轮合成测试不能替代真实水下精度。操作和已运行范围集中README§13.11，不新增重复阶段文档。

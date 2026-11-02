@@ -1,0 +1,30 @@
+%YAML:1.0
+---
+# 由 OpenCV FileStorage 读取；不是 ROS 节点参数 YAML，不含假定的 K/D。
+tag_family: tag36h11
+camera_model: pinhole
+tag_width_m: 0.080
+tag_height_m: 0.080
+target_id: -1                 # -1 自动选；也可在命令行用 --tag-id=实际ID 覆盖。
+detector_threads: 2
+sample_period_s: 0.20         # 只用于离线抽样，不是控制周期/曝光时间。
+max_candidates_per_id: 1000  # 固定种子蓄水池抽样，限制内存且保留整段时间范围。
+max_selected_views: 60
+min_fit_views: 20
+min_holdout_views: 5
+holdout_fraction: 0.20
+time_group_s: 1.0             # 同一视频时间组整体划入拟合或留出。
+# 下列是初始筛选选值，应结合报告调整；不是精度保证或通用理论下限。
+max_hamming: 0
+min_edge_px: 35.0
+min_corner_margin_px: 4.0
+min_blur_variance: 25.0       # 标签ROI的Laplacian方差，剔除明显糊帧。
+min_view_distance: 0.12       # 中心/对数尺度/透视形状特征的归一化距离。
+min_image_span_x: 0.35        # 所选角点包络宽/图宽；不等于均匀覆盖率。
+min_image_span_y: 0.35
+min_normal_spread_deg: 8.0    # 求解后标签法线的最大夹角；拒绝近单一正视。
+max_rms_px: 1.5
+max_holdout_rms_px: 2.0
+max_relative_focal_change: 0.25 # 两组拟合焦距相对全组的最大变化；不是统计标准差。
+solver_max_iterations: 150
+solver_epsilon: 1.0e-10
