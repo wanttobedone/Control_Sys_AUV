@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 只在USB相机所在的Pi启动；不启动飞控桥、手柄或控制器。 -->
+  <arg name="vehicle_name" default="uuv00"/>
+  <arg name="device" default="/dev/video0"/>
+  <arg name="camera_config" default="$(find-pkg-share rov_bringup)/config/usb_camera.yaml"/>
+  <node pkg="usb_cam" exec="usb_cam_node_exe" name="usb_camera"
+        namespace="$(var vehicle_name)/vertical_camera" output="screen">
+    <param from="$(var camera_config)"/>
+    <param name="video_device" value="$(var device)"/>
+    <param name="frame_id" value="$(var vehicle_name)/camera_optical"/>
+    <param name="use_sim_time" value="false"/>
+  </node>
+</launch>

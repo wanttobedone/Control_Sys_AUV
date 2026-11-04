@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.16)
-project(rov_localization VERSION 0.2.0 LANGUAGES CXX)
+project(rov_localization VERSION 0.3.0 LANGUAGES CXX)
 
 # 与 rov_control_core 一样：colcon 默认注册 ament；独立标定时可关闭 ROS 包装。
 option(ROV_LOCALIZATION_WITH_AMENT "Register this library as a ROS 2 package" ON)
 if(ROV_LOCALIZATION_WITH_AMENT)
   find_package(ament_cmake REQUIRED)
 endif()
-find_package(OpenCV 4 REQUIRED COMPONENTS core imgproc videoio calib3d highgui)
+find_package(OpenCV 4 REQUIRED COMPONENTS core imgproc imgcodecs videoio calib3d highgui)
 # Ubuntu 24.04的3.3.0 Debian包导出的CMake目标可能含/usr/lib/lib/...错误路径。
 # 优先使用同一个包的pkg-config信息；用户从源码安装且没有.pc时再走CONFIG。
 find_package(PkgConfig QUIET)
@@ -54,6 +54,28 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 include(CTest)
+# ROS包装独立成库，离线数学库和两个旧CLI不链接rclcpp。
+if(ROV_LOCALIZATION_WITH_AMENT)
+  find_package(rclcpp REQUIRED)
+  find_package(rcl_interfaces REQUIRED)
+  find_package(std_msgs REQUIRED)
+  find_package(sensor_msgs REQUIRED)
+  find_package(geometry_msgs REQUIRED)
+  find_package(diagnostic_msgs REQUIRED)
+  find_package(tf2 REQUIRED)
+  find_package(tf2_ros REQUIRED)
+  add_library(tag_pose_ros SHARED src/tag_pose_node.cpp)
+  target_link_libraries(tag_pose_ros PUBLIC ${PROJECT_NAME} opencv_imgcodecs)
+  ament_target_dependencies(tag_pose_ros PUBLIC rclcpp rcl_interfaces std_msgs sensor_msgs
+    geometry_msgs diagnostic_msgs tf2 tf2_ros)
+  add_executable(tag_pose_node src/tag_pose_node_main.cpp)
+  target_link_libraries(tag_pose_node PRIVATE tag_pose_ros)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(tag_pose_ros PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+  endif()
+  install(TARGETS tag_pose_ros tag_pose_node
+    ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION lib/${PROJECT_NAME})
+endif()
 if(BUILD_TESTING)
   find_package(GTest REQUIRED)
   add_executable(test_camera_calibration test/test_camera_calibration.cpp)
@@ -85,6 +107,25 @@ if(BUILD_TESTING)
   add_test(NAME tag_pose COMMAND test_tag_pose
     "--gtest_output=xml:${CMAKE_CURRENT_BINARY_DIR}/test_results/${PROJECT_NAME}/tag_pose.xml")
   set_tests_properties(tag_pose PROPERTIES TIMEOUT 60)
+
+  if(ROV_LOCALIZATION_WITH_AMENT)
+    find_package(tf2_msgs REQUIRED)
+    add_executable(test_tag_pose_ros test/test_tag_pose_ros.cpp)
+    target_link_libraries(test_tag_pose_ros PRIVATE tag_pose_ros GTest::gtest_main
+      ${ROV_APRILTAG_TARGET})
+    ament_target_dependencies(test_tag_pose_ros PUBLIC tf2_msgs)
+    target_include_directories(test_tag_pose_ros PRIVATE ${ROV_APRILTAG_INCLUDE_DIR})
+    if(ROV_APRILTAG_UTILS_LIBRARY)
+      target_link_libraries(test_tag_pose_ros PRIVATE ${ROV_APRILTAG_UTILS_LIBRARY})
+    endif()
+    target_compile_definitions(test_tag_pose_ros PRIVATE
+      ROV_TAG_POSE_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/config/tag_pose_options.yaml")
+    add_test(NAME tag_pose_ros COMMAND test_tag_pose_ros
+      "--gtest_output=xml:${CMAKE_CURRENT_BINARY_DIR}/test_results/${PROJECT_NAME}/tag_pose_ros.xml")
+    # 软件测试与真实DDS域隔离；夹具只发布合成JPEG，不含执行器代码。
+    set_tests_properties(tag_pose_ros PROPERTIES TIMEOUT 90
+      ENVIRONMENT "ROS_DOMAIN_ID=173;ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST")
+  endif()
 endif()
 
 install(TARGETS ${PROJECT_NAME} calibrate_camera tag_pose_preview EXPORT export_${PROJECT_NAME}

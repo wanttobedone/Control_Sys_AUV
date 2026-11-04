@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 与 core.launch.py 二选一：已有 core 时直接复用其 imu/pressure，不启动第二个桥。 -->
+  <arg name="vehicle_name" default="uuv00"/>
+  <arg name="px4_topic_prefix" default="/fmu"/>
+  <arg name="start_agent" default="false"/>
+  <arg name="agent_device" default="/dev/fcu_data"/>
+  <arg name="agent_baudrate" default="921600"/>
+  <executable if="$(var start_agent)" name="micro_xrce_agent" output="screen"
+    cmd="MicroXRCEAgent serial --dev $(var agent_device) -b $(var agent_baudrate) -v 4"/>
+  <!-- 直接复用上游只读桥可执行程序，不启动执行器桥或 mixer。 -->
+  <node pkg="ustrov_core" exec="px4_sensor_bridge" name="px4_sensor_bridge"
+        namespace="$(var vehicle_name)" output="screen">
+    <param from="$(find-pkg-share ustrov_core)/config/px4_sensor_bridge.yaml"/>
+    <param name="px4_topic_prefix" value="$(var px4_topic_prefix)"/>
+    <param name="imu_topic" value="/$(var vehicle_name)/imu"/>
+    <param name="pressure_topic" value="/$(var vehicle_name)/pressure"/>
+    <param name="temperature_topic" value="/$(var vehicle_name)/barometer_temperature"/>
+    <param name="use_sim_time" value="false"/>
+  </node>
+</launch>

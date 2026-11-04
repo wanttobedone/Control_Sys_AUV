@@ -1,0 +1,67 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 35; 35; 35
+    Fixed Frame: uuv00/home
+    Frame Rate: 20
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Home (10 cm grid)
+      Enabled: true
+      Cell Size: 0.1
+      Plane Cell Count: 12
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/Axes
+      Name: Home FLU
+      Enabled: true
+      Reference Frame: <Fixed Frame>
+      Length: 0.15
+      Radius: 0.005
+    - Class: rviz_default_plugins/Pose
+      Name: Fused Body
+      Enabled: true
+      Shape: Axes
+      Axes Length: 0.12
+      Axes Radius: 0.006
+      Topic:
+        Value: /fusion_preview/pose
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 10
+    - Class: rviz_default_plugins/Pose
+      Name: Visual Body Observation
+      Enabled: true
+      Shape: Axes
+      Axes Length: 0.06
+      Axes Radius: 0.003
+      Topic:
+        Value: /fusion_preview/visual
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 10
+    - Class: rviz_default_plugins/Image
+      Name: Tag Detection
+      Enabled: true
+      Topic:
+        Value: /fusion_preview/debug_image
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 1
+      Transport Hint: raw
+      Queue Size: 1
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 1.0
+      Focal Point: {X: 0, Y: 0, Z: 0}
+      Pitch: 0.6
+      Yaw: 0.7
+Window Geometry:
+  Width: 1100
+  Height: 760

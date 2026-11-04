@@ -1,0 +1,58 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 35; 35; 35
+    Fixed Frame: uuv00/tag_16
+    Frame Rate: 20
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Tag Plane (10 cm grid)
+      Enabled: true
+      Cell Size: 0.1
+      Plane Cell Count: 12
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/Axes
+      Name: Tag Frame
+      Enabled: true
+      Reference Frame: <Fixed Frame>
+      Length: 0.1
+      Radius: 0.005
+    - Class: rviz_default_plugins/Pose
+      Name: Camera Optical Pose (not body)
+      Enabled: true
+      Shape: Axes
+      Axes Length: 0.08
+      Axes Radius: 0.005
+      Topic:
+        Value: /vision_preview/camera_pose
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 1
+    - Class: rviz_default_plugins/Image
+      Name: Tag Detection Image
+      Enabled: true
+      Topic:
+        Value: /vision_preview/debug_image
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 1
+      Transport Hint: raw
+      Queue Size: 1
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 0.9
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: -0.15
+      Pitch: 0.5
+      Yaw: 0.7
+Window Geometry:
+  Width: 1100
+  Height: 760

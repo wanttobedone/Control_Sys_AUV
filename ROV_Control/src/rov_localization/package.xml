@@ -1,14 +1,23 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>rov_localization</name>
-  <version>0.2.0</version>
-  <description>C++ AprilTag calibration and read-only single-tag pose tools for ROV experiments.</description>
+  <version>0.3.0</version>
+  <description>C++ AprilTag calibration, single-tag pose tools and read-only ROS vision node.</description>
   <!-- 沿用当前工程的本地学习包元信息，正式分发前由维护者填写。 -->
   <maintainer email="maintainer@example.invalid">ROV_Control maintainer</maintainer>
   <license>TODO</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>libopencv-dev</depend>
   <depend>apriltag</depend>
+  <depend>rclcpp</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <test_depend>tf2_msgs</test_depend>
   <test_depend>gtest</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

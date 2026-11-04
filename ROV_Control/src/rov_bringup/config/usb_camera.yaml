@@ -1,0 +1,26 @@
+/**:
+  ros__parameters:
+    # Pi上的设备，不是lab笔记本的/dev/video3。可由launch的device参数覆盖。
+    video_device: /dev/video0
+    camera_name: wet_camera
+    image_width: 1280
+    image_height: 720
+    framerate: 30.0
+    io_method: mmap
+    # Pi实装usb_cam 0.8.1不接受mjpeg；其raw_mjpeg直通路径也存在上游兼容问题。
+    # 先使用受支持的MJPEG->RGB转换，再由compressed_image_transport编码JPEG发布。
+    # 这会增加Pi解码/重压缩开销，但保持lab的CompressedImage接口和1280x720内参。
+    pixel_format: mjpeg2rgb
+    av_device_format: YUV422P
+    frame_id: uuv00/camera_optical
+    # 本批定位直接加载camera_wet.xml。此空URL会使驱动CameraInfo未标定；
+    # 该CameraInfo不参与求解，也不要把它交给rectifier/apriltag_ros代替真实内参。
+    camera_info_url: ""
+    brightness: -1
+    contrast: -1
+    saturation: -1
+    sharpness: -1
+    gain: -1
+    autoexposure: true
+    autofocus: false
+    focus: -1

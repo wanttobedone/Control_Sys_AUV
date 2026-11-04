@@ -2,7 +2,7 @@
 
 自研 ROV 规划与控制学习工程。算法、节点、测试使用 C++；自有启动文件统一为 XML 内容、`.launch` 后缀。
 
-## 1. 系统目标与当前进度（2026-10-27）
+## 1. 系统目标与当前进度（2026-11-03）
 
 | 部分 | 当前状态 |
 |---|---|
@@ -12,7 +12,7 @@
 | 水平到点：规划、轨迹跟踪、姿态与物理分配 | 已实现并完成原 Hippo Gazebo 闭环；新入口与实测结果见 §10 |
 | 逐电机开环工具 MotorProbeNode | 已实现；软件接线验证与使用说明见 §11，尚未连接本项目真机 |
 | USTROV 真机手柄开环 | 10-27 用户报告 lab 经网线连接 Pi，运行 core + joystick 完成开环操作；本次源码核对与接入边界见 §14 |
-| 相机离线标定 | lab 已生成湿光路候选 K/D，见 §13.10；在线定位及独立米制精度尚未验收 |
+| 视觉基础 | 湿标定候选K/D及Pi单标签PnP已跑通；97帧记录见§13.13。0.3.0只读ROS接口已实现、23项软件测试通过；修复采集配置后用户确认RViz显示ID16并收到有效camera_pose，跨机视觉链已运行。测频含主动遮挡，持续可见帧率未单测。机体状态/视觉控制未接入，部署见§13.15 |
 | MPC、真机闭环 | 尚未实现/验收；手柄开环不代表这些功能已完成 |
 
 **现在可发布一个相对启动原点的 XY 坐标，驱动 Hippo 转向、跟踪并到点保持。直接从 §10 使用新入口。** 控制为纵向 PD/模型前馈、LOS 航向、姿态 PD；深度仅监测，MPC 尚未加入。当前使用 USTROV 真值反馈，不经过 PX4，不代表视觉/惯导融合已验收。§3–7 保留只读预览，§9 保留有限输入试验，它们是独立诊断入口。
@@ -1285,7 +1285,7 @@ fx/fy是像素焦距，不是镜头标称2.8mm；cx/cy是主点。D不能因为�
 
 CSV独立重算留出RMS与报告一致。留出组中位数1.596191px，帧2634/87.8s为5.686647px，占该组平方误差总和50.7635%；其余显著样本含33.0s/2.852343px、120.8s/2.467809px。拟合组68.2s/5.084252px和39.8s/4.430897px也值得回看。残差本身不能确定是反光、运动成像、角点误差、平面姿态解或模型偏差；不据此自动删帧、换模型或要求重录，保留原始记录。
 
-10-21报告分析后确定先做固定标签局部系的只读位姿、重投影叠加与独立50/100mm位移/高度验收，再建立地图及T_BC。11-02用户确认并实施最小工具，见下节；相机在实际光路中的精度仍待验证。单个完整标签就能起步，内参可用于同一相机模式下其他ID，不需要每张重标相机；全缸坐标还需各ID在共同地图中的真实几何。标签平面歧义、边缘/高度相关偏差和跨ID一致性仍需验证。
+10-21当时安排先做固定标签局部系的只读位姿、重投影叠加与独立50/100mm位移/高度验收，再建立地图及T_BC。11-02用户确认并实施最小工具，见下节；11-03改为直接推进ROS原型接口（§13.14），静止/专门尺量不再前置；实际光路的绝对精度仍待验证。单个完整标签就能起步，内参可用于同一相机模式下其他ID，不需要每张重标相机；全缸坐标还需各ID在共同地图中的真实几何。标签平面歧义、边缘/高度相关偏差和跨ID一致性仍需验证。
 
 ### 13.11 单标签只读定位：录像与USB相机实验（2026-11-02）
 
@@ -1331,6 +1331,8 @@ mkdir创建目录；tar解压源码并拒绝覆盖已存在文件；cd进入包�
 
 #### 13.11.3 USB实时只读实验
 
+此处为“相机直接连接运行程序的电脑”的通用本机示例。11-02用户已明确相机固定在ROV并连接Pi，当前实验请优先按§13.12在Pi运行；笔记本的/dev/videoX不代表Pi上的设备。
+
 先退出占用相机的FFmpeg/opencv_demo，确认当前设备；不要把历史/dev/video3当永久编号：
 
 ~~~bash
@@ -1349,7 +1351,7 @@ v4l2-ctl --list-devices
 
 --device替换--video，二者只选一个。程序请求MJPG和XML中的1280×720、配置中的30fps；首帧实际尺寸不符即报错，不用错误内参继续算。保持调焦、图像模式与湿光路不变；设备接受请求不证明真实曝光率或时延，实测另看记录。
 
-先固定相机看完整ID16、静止约20秒，检查位置散布/姿态翻转/丢检。之后换新--output如tag_pose_move_x_01，保持高度和朝向，用直尺/简单导向沿标签X方向移动50mm、停稳，再移动50mm、停稳，记下各停稳时段；必要时沿Y重复。比较同一标签系下各停稳段位置均值之差：50mm=0.050m、100mm=0.100m，而不是逐帧运动轨迹总长度。另选不同高度和画面位置核系统偏差。此阶段只测一张标签，不先量全16张；能否满足实验精度由实际记录和任务要求判断。
+**可选精度检查（不阻塞§13.14的ROS原型）。** 如需量化误差，再固定相机记录散布，或保持姿态/高度移动已知50mm、100mm，比较两个停稳段p_LC均值差与尺量值。只需同一ID，无需反复手扶录“静止”CSV。当前先看实时方向、尺度量级和连续性。
 
 #### 13.11.4 输出、选值与已验证边界
 
@@ -1363,6 +1365,444 @@ CSV重点看time_s、valid、reason、candidate_x_L_m/y/z、height_m、rms_px；
 
 验证：WSL Ubuntu24.04/GCC13.3/OpenCV4.6.0/AprilTag3.3.0，9个新增定位GTest和9个旧标定GTest全部通过，CTest两个汇总入口；含非零旋转的逆变换/RPY还原、100mm位移、报告K/D强畸变/正视合成投影、歧义/坏帧/丢检、真实36h11图案合成MJPEG→CLI→CSV、尺寸拒绝和不覆盖。显示/画轴/waitKey用Qt offscreen通过，不能称实际桌面/USB验收。Jazzy colcon构建与ros2 run rov_localization tag_pose_preview --help通过，仅证明安装入口，不是ROS节点。临时录像/结果由正式夹具清理；未读取用户原视频、未接实际相机、Pi或推进器，真实精度待上述实验。
 
+### 13.12 当前接法：相机固定ROV、Pi采集求解、Linux笔记本操作（2026-11-02）
+
+用户已确认相机固定在ROV、USB连接机载Pi，笔记本经网线连接Pi。无需拆相机或重写0.2.0求解代码。数据流是Pi本机相机→tag_pose_preview→Pi本地CSV/SSH数值→笔记本scp取数据；窗口可选SSH X11转发。初次只做只读实验，不需启动ROS图像链或手柄控制。相机刚性固定不自动改变内参；继续保持标定分辨率/调焦/湿光路，若光路变更再重核。
+
+以下沿用仓库deployment文档的示例pi@192.168.50.2，实际用户名/IP若不同，替换为已可用的SSH目标。本轮未远程复核设备。源码包先放笔记本~/Downloads；XML以下按笔记本上次results_03路径举例。只传源码和XML，Pi是aarch64，不能复制笔记本x86 build目录。
+
+**笔记本本地终端：准备Pi目录并传文件。**
+
+~~~bash
+ssh pi@192.168.50.2 'mkdir -p ~/vision_tools/tag_pose_01 ~/vision_data'
+scp ~/Downloads/rov_localization_20261102.tar.gz \
+  ~/vision_data/calibration_wet_01/results_03/camera_wet.xml \
+  pi@192.168.50.2:vision_tools/tag_pose_01/
+ssh pi@192.168.50.2
+~~~
+
+第一条在Pi上创建目录；scp的两个源是笔记本文件，目标相对Pi用户家目录；最后登录Pi。内参若已存在Pi，可直接使用其实际路径，不重复传。无需传1.45GB标定录像。
+
+**下面均在Pi的SSH终端：依赖、原生编译、查询相机。**
+
+~~~bash
+sudo apt update
+sudo apt install -y build-essential cmake pkg-config libopencv-dev libapriltag-dev v4l-utils
+
+cd ~/vision_tools/tag_pose_01
+tar --keep-old-files -xzf rov_localization_20261102.tar.gz
+cd rov_localization
+cmake -S . -B build -DROV_LOCALIZATION_WITH_AMENT=OFF \
+  -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build -j2
+
+v4l2-ctl --list-devices
+~~~
+
+apt需要Pi可访问软件源，已有依赖可跳过安装；BUILD_TESTING=OFF减少Pi上的构建工作，正式测试已在开发机跑过，不等于Pi精度验收。这里不需要source ROS或USTROV。--list-devices输出要看USB Camera对应的节点；后续示例假定采集节点为/dev/video0，仅为示例，按Pi输出替换。可用v4l2-ctl -d /dev/video0 -D和--list-formats-ext核其为Video Capture且支持标定模式，不选Metadata节点。
+
+**Pi的SSH终端：先无窗口运行，SSH中会直接打印状态/位置。**
+
+~~~bash
+./build/tag_pose_preview \
+  --device=/dev/video0 \
+  --camera="$HOME/vision_tools/tag_pose_01/camera_wet.xml" \
+  --config="$PWD/config/tag_pose_options.yaml" \
+  --output="$HOME/vision_data/tag_pose_static_01" \
+  --display=false
+~~~
+
+--device读取的是Pi本机设备；--display=false避免在无桌面的Pi上创建窗口。CSV仍完整记录，Ctrl+C结束并保存。若目标标签不可见，target_not_found会列出seen_ids；保持固定ID做位移比较，不在未知地图下自动切换原点。处理率以实际Pi记录判断，不能把请求30fps称已达到30Hz定位。
+
+**实验操作。** 相机保持安装，手动小幅移动ROV检查ID16图像和位姿，推进器停转。固定静止/尺量是可选精度检查，不是继续ROS接入的要求。相机位置不等于机体中心；后续用机体状态时粗测T_BC的平移和朝向。当前计划见§13.14。
+
+**笔记本本地终端：取回本次结果。**
+
+~~~bash
+mkdir -p ~/vision_data/pi_results
+scp -r pi@192.168.50.2:vision_data/tag_pose_static_01 \
+  ~/vision_data/pi_results/
+~~~
+
+将取回的pose.csv/run_info.yaml与已知位移/停稳时段一起分析。不要在Pi的SSH终端执行这条取回命令而误把目标仍放Pi。
+
+**需要图像窗口时再启用X11转发。** 在笔记本有桌面的本地终端另开ssh -X pi@192.168.50.2，进入Pi后echo "$DISPLAY"应有值（常见localhost:10.0，由SSH自动设置，勿手写）。需Pi有xauth且sshd允许X11Forwarding；笔记本桌面需提供可用X显示。条件未满足时先继续display=false并回传具体输出，不直接改SSH服务配置或重启。
+
+已具备转发时，在这个SSH终端进入同一包目录，用QT_X11_NO_MITSHM=1 ./build/tag_pose_preview运行同样参数，去掉--display=false并使用新结果目录；计算/采集仍在Pi，窗口出现在笔记本。此为临时实验显示，不代表ROS图像话题或低时延传输已实现；显示可能影响处理率。当前没有在实际Pi验证此图形链，先以无窗口数值/CSV实验为主。
+
+### 13.13 Pi水中记录分析：已跑通与待验收项（2026-11-02～03）
+
+**11-03最新97帧记录。** 用户随后更新第三份文件，CSV哈希b721d2dd...、run_info为97帧/97有效、41.7318s，全部reason=ok，无未检出/拒绝/歧义标记，正常interrupted退出。用户再次确认仍有手扶或轻微漂动，因此只确认本次单标签连续观测，不宣称静止噪声通过。RMS均值0.816898px、97帧合并RMS=0.821083px、最大1.017990px；估计高度均值26.7469cm、范围26.2368～27.2270cm。定位处理约2.3004帧/s，平均processing_ms=376.449ms，不等同曝光到输出时延。
+
+| 最新97帧整段位置变化（含实际运动） | X | Y | Z |
+|---|---|---|---|
+| 样本标准差（mm） | 10.621 | 5.493 | 2.950 |
+| 最大减最小（mm） | 40.235 | 20.708 | 9.902 |
+
+该表不能作不同动作下的算法精度比较或纯静止噪声。相邻位置变化最大约10.078mm、相对转角最大1.111°；没有明显大角度翻转证据，不代表绝对姿态准确。完整R_LC用于相对转角，原CSV保持只读。
+
+**当前下一步：ROS原型接入。** 用户明确效率优先，原100mm端点尺量和固定静止统计改为可选，不再作为算法运行或ROS接入前置。直接推进§13.14：单ID相机位姿在线显示→机体变换/真实状态→纵向小幅到点。精度未独立验收的事实保留；方向、尺度量级、失效时不发旧数据，以及闭环前的执行器方向/停止行为仍需检查。
+
+以下保留69帧手扶记录及119帧运动记录，分别为不同实验，不能当作最新数据。
+
+**11-03新增记录。** 已收到不同内容的69帧CSV和匹配run_info，SHA256为1f2761c6...，旧119帧为3057ba51...。新记录33.9385s、63有效（91.30%）、2角点边缘拒绝、4未检出；前0～30.9557s连续63帧有效，失败均在末尾。约2.0036帧/s、平均processing_ms=437.26，仍不是30Hz定位或曝光时延。有效帧RMS平均0.442325px、中位0.417025px、最大0.719357px；高度26.1719～27.5228cm、均值26.7934cm。图像拟合好不能代替尺量定位精度。
+
+| 新记录位置量 | X | Y | Z |
+|---|---|---|---|
+| 有效63帧样本标准差（mm） | 17.932 | 6.768 | 3.693 |
+| 有效63帧最大减最小（mm） | 58.583 | 28.702 | 13.509 |
+
+上表是整段变化，不先称静止噪声。X首末改变-42.941mm；0～5s的X均值-13.300mm，而25～30s为-53.453mm。与此同时，原始四角均值中心从首帧(759.65,393.36)px到最后有效帧(715.74,539.17)px，图像中标签下移约146px；不能只归因PnP输出漂移。31.4127s角点v=717.78px已超过当前720高图像的4px边距要求，随后丢检。用户随后明确为“手扶保持位置”，因此统计包含实际手扶运动与视觉误差，不能凭该记录将两者分离，也不选择“最好看”的小段作为全程静止验收。
+
+当时建议简单支撑后补静止/尺量，现已由§13.14原型路线替代，作为可选检查保留。以下首轮运动记录是历史证据，不与69帧或最新97帧混为同一试验；原数据不修改。
+
+用户在Pi运行后提供run_info.yaml与pose.csv（119行），随后明确水中拍摄、离底约10～30cm、并非全程静止。即使目录名为tag_pose_static_01，也必须按运动记录分析。已读取两份原文件并以只读JS重算，未编辑/过滤覆盖原CSV，也没有增加运行代码、阈值或临时报表文件。
+
+| 量 | 本次结果 | 正确解释 |
+|---|---|---|
+| 设备/程序 | Pi路径、/dev/video0、0.2.0、1280×720、ID16/80mm | 用户设备上的真实采集→检测→PnP→CSV已跑通；并非本机远程测试 |
+| 记录跨度/帧数 | 58.3675s，119帧 | steady_clock读取后时间，不是曝光时间 |
+| 有效帧 | 77/119，64.71% | 全段含40个未检出ID16的帧，不能视为标签一直可见时的识别率 |
+| 检出指定ID后的质量通过 | 77/79，97.47% | 另外2帧重投影RMS为3.07555/3.19855px，被现有3px门槛拒绝 |
+| 歧义标记 | 0帧 | 只表示启发式检查未标歧义，不保证姿态真值正确 |
+| 有效帧RMS | 中位0.88691px，95分位1.54481px，最大2.23071px | 仅限valid=1，不是厘米位置精度 |
+| 有效帧平面垂距 | 0.243725～0.316310m，中位0.273873m | 与大致高度同一量级，不证明高度准确或10cm工作距离通过 |
+| 处理间隔/速度 | 均值0.49464s，约2.0217帧/s | 不是相机报告的30fps；该速度不等于端到端时延 |
+| processing_ms | 平均432.713ms，95分位546.829ms | 当前计时含灰度/检测/PnP，尚未分段，不能直接归因某一个函数；不含采集等待/显示/落盘 |
+
+时间结构：开头26帧（0～11.30s）未检出ID16；13.916～50.944s有72帧连续有效；末尾也有多帧未检出。数据不能判断ID16是否离开画面、被遮挡、近距离裁切或检测失败，也不能据此声称其他ID均未识别。原CSV只记录指定目标，不含全部seen_ids列表。
+
+相邻且都有效的帧中，最大位置变化约94.79mm，发生43.138→43.644s（约0.506s）；最大旋转变化15.368°发生42.108→42.715s，是不同帧对。旋转变化用完整R_LC的相对转角计算，避免欧拉角±180°环绕误判。用户实际在移动，缺少真值/动作时间标记，不能把这些量当定位跳变误差、静止标准差或定位精度。旋转矩阵正交误差约1e-12、行列式约1，只证明数学表示一致。
+
+**历史操作建议。** 本记录后曾建议先支撑静止再尺量，11-03已取消前置性质；当前实验见§13.14。不因运动数据要求重标或放宽门槛。10cm高度的完整可见性未证明；处理慢的原因和端到端时延仍不能由processing_ms单值确定。
+
+**当前完成边界。** 真机Pi采集/单标签相机位姿/记录已得到用户设备证据；静止稳定性、已知位移尺度、地图/T_BC、ROS状态和视觉控制闭环仍未验收。原有§13.11软件测试及§13.12部署说明保留，本节更新后续真实运行进展。
+
+### 13.14 当前实际实验计划：先跑通原型（2026-11-03）
+
+用户明确以效率、基础可运行和合理实验误差为目标。本节替代此前“必须先静止统计、再100mm尺量”的推进顺序；这些可选精度检查以后按需要做。已有湿标定XML和单标签连续观测足以继续接ROS，不需要再录标定视频或先测齐16张标签。
+
+| 顺序 | 要做的真实实验 | 软件工作与当前状态 | 用户现场操作与完成标志 |
+|---|---|---|---|
+| 1 | 实时看到相机位置、姿态和标签画面 | 0.3.0已实现：Pi复用usb_cam发压缩图像，lab运行已有检测/PnP的ROS包装及RViz；23项软件测试通过，现场待运行，见§13.15 | ROV保持现有相机安装，约25cm附近看完整ID16；推进器停转，手动小幅平移/转动，再遮挡一次。图像和位姿响应一致、尺度量级合理，遮挡后无新pose、恢复可继续 |
+| 2 | 得到机体位置、航向及真实状态 | 粗测T_BC并做坐标变换；先定义Z向上的局部世界，再建立软件home；复核USTROV IMU/压力和C++估计器，补控制所需速度/角速度 | 标明机头方向、相机图像向上对应哪个机体方向，尺量相机相对选定机体参考点的三向偏移；手动前移时home X增加，左移Y增加，转向符号正确 |
+| 3 | 真机控制计算只读运行 | 接真实反馈和短程参考，输出拟用控制量供查看，随后另批实现真机执行入口；保留仿真控制入口 | 电机不由此计算驱动，手动改变误差，看拟用推力/力矩方向；确认时间/丢标超时和命令源切换 |
+| 4 | 沿缸长边低速小幅到点 | 确认实际推进器通道、低幅响应、限幅和停止，接唯一执行命令源；纵向位置与航向反馈，深度仅监测 | 前方先选5～10cm量级且标签全程可见的目标；减小误差、到点附近停止持续推进，记录误差和时间。只沿长边起步，后方目标不默认触发大转弯；姿态/浮力不能保持时先处理该问题 |
+| 5（需要时） | 跨标签更大范围运动 | 只测路线附近2～4张标签位置/朝向，添加局部地图和连续性检查 | 原点不随ID切换而变；扩大路线前核实际视野与机体余量 |
+
+当前97帧的像素RMS不等于厘米位置误差。首个10cm左右的到点实验可先讨论几厘米的任务容差，结合机体余量、观测晃动和实际动作设定；不用先追毫米精度，也不能用与目标行程相当的容差宣称跟踪成功。单标签范围不够就做小片地图，不靠隐藏丢检跨越无反馈区域。
+
+**已实现的部署选择。** Hippo官方教程的开头框图将robot/camera Pi的compressed图像与camera_info、offboard PC的decoder/rectifier/apriltag/vision_ekf分开，说明的是这套视觉链，不是整个机器人系统都在板外。按该拓扑，Pi相机仍接原USB，lab经以太网运行检测和定位；用户仍希望最终Pi独立计算，本节点不绑定机器，可迁回Pi并关闭调试图像。Pi在现有USTROV系统还承担Agent/飞控串口、传感器桥、混控和执行器桥。现有Pi工具约2.3Hz不是硬件性能上限；先测解码/检测/PnP分段耗时再优化。完整Hippo视觉EKF未接入，这批是复用现有C++检测/PnP的ROS接口。[官方图像拓扑原文](https://hippocampusrobotics.github.io/docs/contents/getting_started/apriltag_localization.html)。
+
+入口usb_camera.launch和tag_pose_view.launch已创建，均XML，使用方法见下节。输出为标签局部系的相机PoseStamped，不是机体Odometry。源时间戳保留，断图不重复发旧pose；Pi/lab时钟核对后才能估算跨机延迟。文件/函数和状态所有权见[总体设计§13.13](docs/PATH_TRACKING_DESIGN.md#1313-面向实际水缸的最小原型计划与函数设计2026-11-03本批已实施)。
+
+**现在现场只需核对依赖，不补录数据。** 在Pi的SSH终端执行：
+
+~~~bash
+source /opt/ros/jazzy/setup.bash
+ros2 pkg prefix usb_cam
+dpkg-query -W ros-jazzy-usb-cam
+~~~
+
+source加载系统ROS；prefix检查采集驱动是否已安装并被当前环境找到；dpkg-query检查apt安装版本。找不到包只表示需要安装，不表示相机故障。lab本地终端执行printenv ROS_DISTRO确认ROS发行版；两机沿用现有有线DDS环境。第一批不需要启动USTROV core/joystick，也不需要解锁。实际构建与启动命令如下。
+
+### 13.15 ROS单标签可视化：0.3.0交付与操作（2026-11-03）
+
+用户已确认§13.14方案并要求实施。本批新增tag_pose_node.h/.cpp、tag_pose_node_main.cpp，复用既有AprilTagDetector和TagPoseEstimator；新增两个XML launch、两份ROS配置、一份RViz配置和test_tag_pose_ros.cpp，更新构建/依赖。原标定/PnP算法及质量门槛不变。节点不发布执行器命令，不连接PX4，不输出机体速度、home或Odometry。旧tag_pose_preview仍可用，但采集时不要同时占用同一个/dev/video0。
+
+**1. 准备源码。** 修订源码包为Control_Sys_AUV/tmp/delivery/rov_vision_ros_20261103_r2.tar.gz，修正Pi实装usb_cam 0.8.1的格式配置及仅构建启动包的命令；旧包用户按第4步现场修改即可。包含src/rov_localization、src/rov_bringup、README和总体设计，不含build/install、用户标定或录像。假设已放到lab的下载目录，在lab本地终端：
+
+~~~bash
+mkdir -p ~/vision_tools/ros_vision_01
+tar -xzf ~/下载/rov_vision_ros_20261103_r2.tar.gz -C ~/vision_tools/ros_vision_01
+ssh pi@192.168.50.2 'mkdir -p ~/vision_tools/ros_vision_01'
+scp ~/下载/rov_vision_ros_20261103_r2.tar.gz pi@192.168.50.2:vision_tools/ros_vision_01/
+~~~
+
+mkdir建立本批工作区；tar解出源码；ssh只建立Pi目录；scp传源码压缩包，不传lab的x86构建。IP按现有有线连接，若使用ustrov.local则替换地址。已有完整Control_Sys_AUV源码的用户也可在ROV_Control中构建对应两个包，不必再建一份工作区。
+
+**2. Pi安装采集驱动并安装启动包。** Pi的SSH终端：
+
+~~~bash
+sudo apt update
+sudo apt install ros-jazzy-usb-cam ros-jazzy-compressed-image-transport python3-colcon-common-extensions
+cd ~/vision_tools/ros_vision_01
+tar -xzf rov_vision_ros_20261103_r2.tar.gz
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select rov_bringup --packages-ignore rov_localization --symlink-install
+source install/local_setup.bash
+~~~
+
+apt安装现成C++相机驱动、JPEG传输插件和colcon；Pi本批只构建rov_bringup的启动/配置安装，不编译定位算法。packages-ignore使colcon不把源码中的rov_localization作为本次待加载的工作区依赖，否则仅packages-select会查找尚未构建的package.sh。此命令适用于交付包的两包工作区；以后Pi也运行定位时按第6步构建两包，不忽略定位包。Pi安装依赖时需要可用互联网/DNS，单独网线接lab不自动共享上网。已安装的依赖不必重复apt。驱动camera_info_url留空会提示未标定，本节点使用既有XML，不使用这个未标定CameraInfo。保持1280×720和原光路。
+
+**3. lab构建定位。** lab本地终端：
+
+~~~bash
+sudo apt update
+sudo apt install build-essential cmake pkg-config libopencv-dev libapriltag-dev \
+  python3-colcon-common-extensions ros-jazzy-rclcpp ros-jazzy-tf2-ros \
+  ros-jazzy-diagnostic-msgs ros-jazzy-rviz2 ros-jazzy-launch-xml
+cd ~/vision_tools/ros_vision_01
+source /opt/ros/jazzy/setup.bash
+MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build \
+  --packages-select rov_localization rov_bringup --executor sequential \
+  --symlink-install --cmake-args -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
+source install/local_setup.bash
+~~~
+
+packages-select只构建这两个包；sequential避免包间并行，-j2限制编译并行；symlink-install方便配置修改；BUILD_TESTING=OFF避免现场构建正式测试；RelWithDebInfo同时优化和保留调试信息。先加载系统ROS，再叠加本工作区；新终端需重新source。两端保持原有DDS有线配置和相同ROS_DOMAIN_ID，不因这个包切换现有通信环境。
+
+**4. 启动采集和定位。** 先停止旧tag_pose_preview/ffmpeg/opencv_demo对相机的占用。Pi的SSH终端在已source环境中运行：
+
+~~~bash
+ros2 launch rov_bringup usb_camera.launch vehicle_name:=uuv00 device:=/dev/video0
+~~~
+
+该命令只采集相机，发布/uuv00/vertical_camera/image_raw/compressed。vehicle_name确定命名空间和光学frame；device指定Pi本地设备。Pi实装0.8.1拒绝旧配置mjpeg，节点因此退出，lab诊断为waiting_image且received_frames=0。现配置改为mjpeg2rgb：相机MJPEG→Pi解码RGB→compressed_image_transport编码JPEG→lab解码/定位；有额外Pi开销，尚未测量现场性能。raw_mjpeg虽列为支持格式，但上游直通分支有已报告的不匹配问题，本轮不直接改用它。[上游问题记录](https://github.com/ros-drivers/usb_cam/issues/346)。
+
+旧包现场最小修复：在Pi执行下列命令，只修改采集参数；camera_config显式加载源码文件，无需重编译或重新传整包。lab定位节点可保持运行。ros2 pkg prefix应返回压缩插件安装路径；若找不到，再联网安装ros-jazzy-compressed-image-transport。
+
+~~~bash
+cd ~/vision_tools/ros_vision_01
+sed -i 's/pixel_format: mjpeg[[:space:]]*$/pixel_format: mjpeg2rgb/' src/rov_bringup/config/usb_camera.yaml
+ros2 pkg prefix compressed_image_transport
+ros2 launch rov_bringup usb_camera.launch vehicle_name:=uuv00 device:=/dev/video0 \
+  camera_config:="$PWD/src/rov_bringup/config/usb_camera.yaml"
+~~~
+
+lab本地终端运行（camera_file使用已经生成的results_03文件）：
+
+~~~bash
+source /opt/ros/jazzy/setup.bash
+source ~/vision_tools/ros_vision_01/install/local_setup.bash
+ros2 launch rov_bringup tag_pose_view.launch vehicle_name:=uuv00 \
+  camera_file:="$HOME/vision_data/calibration_wet_01/results_03/camera_wet.xml"
+~~~
+
+camera_file是lab本地文件路径，非Pi路径；节点加载一次既有K/D；options_file默认安装的tag_pose_options.yaml（ID16、80mm）。启动后出现RViz的标签网格、相机坐标轴和检测画面。红绿蓝轴分别是相机光学X/Y/Z，不能当作机体前左上。定位原点是tag_16，不是上电home；L的Z可能指向缸底，因此相机z负值不代表定位错误。修改目标ID时改options文件并同步fixed_frame:=uuv00/tag_N；ID变化后重启定位节点。
+
+**5. 查看输出和记录。** lab另开终端并加载同一环境：
+
+~~~bash
+ros2 topic echo /uuv00/vision/camera_pose --once
+ros2 topic hz /uuv00/vision/camera_pose
+ros2 topic echo /uuv00/vision/diagnostics --once
+~~~
+
+echo --once看一条位姿；hz看有效位姿的实际输出频率，不是配置30fps；diagnostics查看valid、原因、收到/处理/有效帧数，以及decode_ms、detect_ms_including_grayscale、solve_ms。三者是本机计算耗时，不含网络/曝光时延。诊断每帧及250ms健康定时器更新，其频率不能当定位频率。图像未到为waiting_image；丢ID为target_not_found；重复/倒退为non_increasing_stamp；无新图超过2s为image_timeout。所有失败均不重发旧pose/TF，RViz可能保留最后图形，应同时看状态和时间。
+
+手动小幅移动整台ROV，确认图像与位姿对应；遮挡ID16，确认pose停止更新；恢复后继续。暂不要求再录专门静止/尺量试验。需要留记录时使用新的输出目录：
+
+~~~bash
+mkdir -p ~/vision_data/ros_vision
+ros2 bag record -o "$HOME/vision_data/ros_vision/run_$(date +%Y%m%d_%H%M%S)" --topics \
+  /uuv00/vertical_camera/image_raw/compressed \
+  /uuv00/vision/camera_pose /uuv00/vision/diagnostics
+~~~
+
+Ctrl+C结束并落盘。本批用rosbag保存收到的JPEG/源时间/结果；mjpeg2rgb兼容路径中的JPEG已经在Pi重压缩，不是相机原始码流。旧CLI的CSV流程仍保留，不另外造一份同义在线CSV。
+
+**6. 以后放回Pi计算。** 在Pi安装上述lab编译依赖并原生构建两个包；Pi内参仍可用已有~/vision_tools/tag_pose_01/camera_wet.xml。停止lab定位节点后，在Pi已source的终端运行：
+
+~~~bash
+ros2 launch rov_bringup tag_pose_view.launch vehicle_name:=uuv00 \
+  camera_file:="$HOME/vision_tools/tag_pose_01/camera_wet.xml" \
+  start_rviz:=false publish_debug_image:=false
+~~~
+
+采集launch照常在Pi另一个终端运行。只是把同一个节点换机器，图像走本机DDS；小体积pose仍可供lab查看。不能两边同时启动定位，避免同名节点和TF/pose重复发布。若要继续RViz，只在lab运行rviz2、将Fixed Frame设uuv00/tag_16并添加/uuv00/vision/camera_pose的Pose显示；不同时再起一份定位。Pi实际帧率/延迟以运行结果为准，先关闭调试图像，之后依据分段耗时决定是否需要优化检测配置。
+
+**7. 一帧数据示例（说明计算，不是真实测量）。** 相机驱动给图像时间t；ID16四角经detect得到像素，estimate用0.080m外框和XML求T_CL。假设R_CL=I、t_CL=(0.020,-0.010,0.270)m，则p_LC=-R_CLᵀt_CL=(-0.020,0.010,-0.270)m，R_LC=I。publishPose输出frame=uuv00/tag_16、stamp=t、四元数(0,0,0,1)，TF子帧vision_camera_optical同值；RViz画出相机在标签附近的位置。下一帧找不到ID16，就只发布诊断/调试图，不把该位置重新打时间戳发出；没有任何电机指令。
+
+**8. 已验证范围。** WSL Ubuntu24.04/Jazzy、GCC13.3、OpenCV4.6、AprilTag3.3，两个包编译通过；原9项标定+9项定位+新增5项ROS测试共23项通过（3个CTest入口）。新测试用真实编码JPEG经DDS进入节点，验证位姿逆变换、四元数/TF、源时间、调试图、丢标/坏尺寸/JPEG/错frame、重复/倒退时间、断图与恢复及只读配置；正式测试源码保留。两个XML的show-args通过，使用临时合成内参实际启动定位launch并正常SIGINT退出；无ROS旧CLI构建也通过。合成内参/测试目录随后清理。没有接用户USB/Pi、验证跨机网络或实际RViz窗口，因此现场启动成功、真实速度和误差仍需本节操作确认；未修改USTROV或接执行器。
+
+**同日现场反馈与r2修复：** 用户lab日志已显示tag_pose_node/RViz启动；Pi实装usb_cam 0.8.1在旧mjpeg参数下以-6退出，lab收到0帧。r2修正采集参数、压缩插件依赖和Pi构建命令；算法源码未改。用户随后确认RViz显示ID16（原ID6为笔误），并提供有效camera_pose：frame=uuv00/tag_16、p=(-0.0122565,-0.0920249,-0.232123)m，估计光心距标签平面23.21cm。现有publishPose仅在valid时调用，因此在线相机位姿链已运行。两次topic hz的最大间隔分别8.920s/4.820s，第二段末次窗口平均5.101Hz；用户确认有移动、遮挡或离开画面，不能把这些混合记录当作持续可见时帧率。长间隔与失去ID时停发pose的逻辑一致，不反复要求静止CSV；下一步粗测相机安装偏移/朝向，设计机体位姿与home，机体状态与视觉闭环仍待实现。
+
+### 13.16 已安装后，每次重启的视觉启动顺序
+
+适用于已完成§13.15安装、Pi采集且lab定位的当前实验。重启只需恢复进程与终端环境，不重复apt、解压或colcon构建。用户新终端的Package 'rov_bringup' not found且只搜索/opt/ros/jazzy，是没有source本工作区；cd只切目录，不加载ROS包。运行用到的配置为修复后的mjpeg2rgb、ID16、原1280×720湿标定。
+
+**终端A：从lab登录Pi，启动相机。** 相机USB连接Pi、两机用原有网线/IP连接并上电后，在lab执行：
+
+~~~bash
+ping -c 3 192.168.50.2
+ssh pi@192.168.50.2
+~~~
+
+ping用三次请求确认Pi局域网可达；ssh进入Pi，提示符应变成pi@ustrov。已安装依赖后，视觉运行只需两机局域网互通，无需连接互联网。随后在这个Pi终端执行：
+
+~~~bash
+source /opt/ros/jazzy/setup.bash
+source ~/vision_tools/ros_vision_01/install/local_setup.bash
+source ~/ustrov-network/dds-wired-env.sh
+ros2 pkg prefix rov_bringup
+ros2 launch rov_bringup usb_camera.launch \
+  vehicle_name:=uuv00 device:=/dev/video0 \
+  camera_config:="$HOME/vision_tools/ros_vision_01/src/rov_bringup/config/usb_camera.yaml"
+~~~
+
+三个source依次加载系统ROS、本工作区、现有有线DDS配置（domain0/Fast DDS/原有网卡白名单）；prefix应返回/home/pi/vision_tools/ros_vision_01/install/rov_bringup。launch在Pi启动相机驱动；vehicle_name统一话题/frame前缀，device是Pi相机节点，camera_config明确读取已修复的源码配置，避免误读旧安装副本。保持此终端运行。设备编号若重启后变化，再在Pi执行v4l2-ctl --list-devices确认，不更改图像分辨率。
+
+**终端B：lab本地启动定位和RViz。** 新开lab终端，不SSH：
+
+~~~bash
+source /opt/ros/jazzy/setup.bash
+source ~/vision_tools/ros_vision_01/install/local_setup.bash
+source ~/ustrov-network/dds-wired-env.sh
+ros2 pkg prefix rov_bringup
+ros2 launch rov_bringup tag_pose_view.launch \
+  vehicle_name:=uuv00 \
+  camera_file:="$HOME/vision_data/calibration_wet_01/results_03/camera_wet.xml"
+~~~
+
+三个source作用相同，但都加载lab本地文件，prefix应位于/home/lab。此launch启动lab的TagPoseNode和RViz；camera_file是lab的湿标定XML，目标ID16由options配置读取。Pi相机和lab定位分属不同进程，两个终端均保持运行，首次完整看见ID16且通过质量检查后产生新camera_pose。
+
+**终端C：lab本地查看结果。** 再开一个lab终端：
+
+~~~bash
+source /opt/ros/jazzy/setup.bash
+source ~/vision_tools/ros_vision_01/install/local_setup.bash
+source ~/ustrov-network/dds-wired-env.sh
+ros2 topic echo /uuv00/vision/diagnostics --once
+ros2 topic echo /uuv00/vision/camera_pose --once
+ros2 topic hz /uuv00/vision/camera_pose
+~~~
+
+diagnostics查看valid/reason与输入计数；camera_pose查看一条相机位置/姿态；hz持续统计接收间隔，Ctrl+C只停止该测频命令。若当前没有有效位姿，echo会等待，先根据诊断查看图像是否到达及ID16是否可见。长时间遮挡会停止新pose，不属于source问题。退出视觉实验时，在终端B和终端A分别Ctrl+C停止各自launch。
+
+source只影响当前shell及其后来启动的程序；一个终端source不会改变另一个已有终端，lab的环境也不会由SSH传到Pi。希望新终端自动加载时，可在两机各自的~/.bashrc末尾加入上述三条source，已有行不重复；再source ~/.bashrc使当前终端生效。该操作只加载环境，不自动启动相机或定位。dds-wired-env.sh应为此前已部署的有线脚本；若路径不存在，先核对既有部署位置，勿因本流程自行重设网卡IP或改成localhost-only。
+
+### 13.17 机体视觉 + Hippo IMU/压力融合 + home
+
+2026-11-03用户确认实施。本批新增 `rov_state_estimation`，复用 USTROV 的 C++ EKF 计算库；原检测/PnP继续复用。现在的关系是：Pi相机→lab的TagPoseNode→相机/机体变换→Hippo EKF，同时Pi的IMU/压力桥向EKF提供惯性和高度观测→融合机体位姿/速度→home。新代码运行在lab；以后同一源码可在Pi原生编译，关闭RViz/调试图运行。**当前为只读融合试验，还没有接入真机控制或电机。**
+
+本次自研代码目录 `src/rov_state_estimation`：`FrameAdapter` 负责安装与home变换，`HippoFusion` 负责源时间、压力基准、观测缓存和上游EKF调用，`FusionNode` 负责ROS话题/服务/TF/诊断。文件/函数/时序的完整契约见 [总体设计§13.14](docs/PATH_TRACKING_DESIGN.md#1314-机体观测hippo-ekf-与融合-home2026-11-03)。本节替代先前“纯视觉home”的待实现计划，安装偏移已填入 `src/rov_bringup/config/hippo_fusion.yaml`。
+
+**1. 一次性同步和构建。** 使用新交付包 `rov_fusion_ros_20261103.tar.gz`。它包含三个自研包及本地USTROV f22f647的 `ustrov_state_estimation` / `ustrov_state_estimation_msgs` 两个源码快照，便于在原工具工作区构建相同EKF，不要求lab重新部署整个Gazebo工程。上游源码未改，没有复制Windows/WSL的编译产物。
+
+先停止旧lab定位launch。以下在lab本地执行，假设下载包在 `~/下载`：
+
+~~~bash
+cd ~/vision_tools/ros_vision_01
+tar -czf "$HOME/vision_tools/ros_vision_before_fusion_$(date +%Y%m%d_%H%M%S).tar.gz" src
+tar -xzf ~/下载/rov_fusion_ros_20261103.tar.gz
+source /opt/ros/jazzy/setup.bash
+sudo apt install libopencv-dev libapriltag-dev libeigen3-dev python3-colcon-common-extensions
+MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build \
+  --base-paths src/rov_localization src/rov_state_estimation src/rov_bringup \
+    src/ustrov_state_estimation src/ustrov_state_estimation_msgs \
+  --executor sequential --symlink-install \
+  --cmake-args -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
+source install/local_setup.bash
+source ~/ustrov-network/dds-wired-env.sh
+ros2 pkg executables rov_state_estimation
+~~~
+
+第一条tar只备份原src，第二条解压更新；apt安装编译依赖，已有依赖不重复下载。`--base-paths`限定这五个包，避免误构建其他控制工程；sequential逐包、两个并行变量限制单包编译并发；symlink-install使多数配置直接对应源码；OFF跳过用户机器上的软件测试编译，RelWithDebInfo优化运行并保留调试信息。最后应看到 `rov_state_estimation hippo_fusion_node`。已有湿标定XML保留原路径，不需重标或重录。
+
+lab将同一包发到Pi：
+
+~~~bash
+scp ~/下载/rov_fusion_ros_20261103.tar.gz pi@192.168.50.2:vision_tools/ros_vision_01/
+~~~
+
+Pi的SSH终端只更新启动配置：
+
+~~~bash
+cd ~/vision_tools/ros_vision_01
+tar -xzf rov_fusion_ros_20261103.tar.gz
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select rov_bringup \
+  --packages-ignore rov_localization rov_state_estimation \
+    ustrov_state_estimation ustrov_state_estimation_msgs \
+  --symlink-install
+source install/local_setup.bash
+~~~
+
+ignore明确本次Pi不编译定位/融合依赖，避免colcon查找尚未安装的同工作区package.sh。Pi仍使用现有USTROV传感器桥；本批没有要求重刷飞控或改串口。
+
+**2. 每次启动：Pi负责两个输入入口。** 各终端环境可加入各自~/.bashrc（已有行不重复），source本身不启动节点。Pi使用已有USTROV安装层再叠加工具工作区：
+
+~~~bash
+source /opt/ros/jazzy/setup.bash
+source ~/USTROV/ustrov_underlay/install/setup.bash
+source ~/USTROV/ustrov_ws/install/setup.bash
+source ~/vision_tools/ros_vision_01/install/local_setup.bash
+source ~/ustrov-network/dds-wired-env.sh
+~~~
+
+Pi终端A启动相机（与上一批相同）：
+
+~~~bash
+ros2 launch rov_bringup usb_camera.launch vehicle_name:=uuv00 device:=/dev/video0 \
+  camera_config:="$HOME/vision_tools/ros_vision_01/src/rov_bringup/config/usb_camera.yaml"
+~~~
+
+Pi终端B：**已有core运行时直接复用其imu/pressure，不再执行下面启动命令。** 若当前没有core和Agent运行，使用新的只读入口：
+
+~~~bash
+ros2 launch rov_bringup sensors_readonly.launch \
+  vehicle_name:=uuv00 start_agent:=true agent_device:=/dev/fcu_data
+~~~
+
+该入口只启MicroXRCEAgent和现有px4_sensor_bridge，不启执行器桥/mixer。`/dev/fcu_data`沿用现行core默认串口别名；若实际core一直使用 `/dev/ttyAMA5`，填这个已核验设备。若已有独立Agent但没有传感器桥，则用 `start_agent:=false`，避免争用串口。
+
+在另一个已加载相同环境的Pi/lab终端，最小检查两类输入：
+
+~~~bash
+ros2 topic echo /uuv00/imu --once
+ros2 topic echo /uuv00/pressure --once
+~~~
+
+水平静止时FLU比力z应约+9.81m/s²，角速度接近0；orientation无效标志为-1，融合器不使用这个占位。pressure要求真实水压、单位Pa；旧记录的MS5837压力比例尚未验收，先手动上下移动时观察压力是否随下沉增大。约5cm水深变化对应约490Pa；这是粗查比例，不另设精密标定台。若变化完全不对，先查水压计来源/比例，不能靠改融合噪声弥补。
+
+**3. lab终端启动总入口。** 先停止原 `tag_pose_view.launch`，避免两份同名定位节点。已加载.bashrc环境可省略下面source：
+
+~~~bash
+source /opt/ros/jazzy/setup.bash
+source ~/vision_tools/ros_vision_01/install/local_setup.bash
+source ~/ustrov-network/dds-wired-env.sh
+ros2 launch rov_bringup hippo_fusion.launch \
+  vehicle_name:=uuv00 \
+  camera_file:="$HOME/vision_data/calibration_wet_01/results_03/camera_wet.xml"
+~~~
+
+新入口复用原TagPoseNode，并增加融合节点/RViz。仍使用ID16，启动时让它完整可见，ROV保持静稳直到READY/home已建立。`startup_settle_s=3`只是最低等待；在5Hz合成观测测试中原库倾斜方差收敛和home建立约需25～31s，真实等待以诊断为准，未放宽其3°倾斜方差门槛。若已单独运行TagPoseNode，可加 `start_vision:=false` 只启动融合/RViz。
+
+首次视觉/压力源时间相近时，对齐压力高度零点：z=z0−(P−P0)/(rho·g)。因此直接在水里启动即可；这里z是飞控中心到标签平面的高度，不是距水面的深度。相机消息、IMU和压力的源时间均来自Pi；lab接收时间不用于IMU积分。
+
+**4. 查看和最小试验。** lab另开终端：
+
+~~~bash
+ros2 topic echo /uuv00/state/diagnostics --once
+ros2 topic echo /uuv00/state/pose_home --once
+ros2 topic echo /uuv00/state/velocity_body --once
+~~~
+
+第一条看READY、home_ready、pressure_aligned及拒收原因；第二条看相对home的飞控板中心，米/四元数；第三条线速度m/s、角速度rad/s，两者都用FLU机体系。依次手动前移、左移、上提和小角度转动，home位置应按前/左/上变化；先保持标签可见。再短暂遮挡，诊断变DEGRADED、IMU继续预测；恢复后位置/姿态重新与视觉接近才回READY，home不自行归零。长遮挡的预测会漂移。
+
+需要把当前位置设为新的home：
+
+~~~bash
+ros2 service call /uuv00/state/reset_home std_srvs/srv/Trigger "{}"
+~~~
+
+success表示接受请求；须等待请求之后的新视觉和就绪融合状态才完成归零，不用旧缓存立即归零。重设仅影响home，不清除EKF/压力基准。停止IMU或其源时间跳变超过0.10s时，不补发伪造状态；显示FAULT需重启lab融合launch。启动参数/YAML修改后同样重启，当前参数为只读。
+
+可选记录一次短实验，无须再生成旧静止CSV：
+
+~~~bash
+mkdir -p ~/vision_data/fusion
+ros2 bag record -o "$HOME/vision_data/fusion/run_$(date +%Y%m%d_%H%M%S)" --topics \
+  /uuv00/imu /uuv00/pressure /uuv00/vision/camera_pose /uuv00/vision/body_pose \
+  /uuv00/state/pose /uuv00/state/pose_home /uuv00/state/velocity_body /uuv00/state/diagnostics
+~~~
+
+**5. 一帧怎样流通。** 用户原相机消息p_LC=(-.0122565,-.0920249,-.2321226)m，经R_BC/t_BC杆臂校正和R_WL翻转，视觉飞控中心p_WB≈(-.0091683,+.0250792,+.3488862)m。这帧只是一条观测，姿态/位置与IMU和压力进入EKF；融合不会承诺逐字等于视觉。若融合稳定后首次输出也接近此状态，就以其位置及约-89.45°水平航向建立home，初始home位置为零。下一段无新图像但有新IMU时继续预测；压力增加约490Pa，对齐后的高度观测下降约0.05m；新的AprilTag位姿再校正水平位置与完整姿态。
+
+**6. 当前边界和验证。** 完整函数设计见总体设计§13.14–13.15。单标签定位范围、粗测外参、飞控板中心近似IMU点和压力点高度变化一致，是当前原型假设。没有全标签地图、DVL、实机闭环或新的米制精度结论。上游不导出完整协方差，本批输出PoseStamped/TwistStamped，不填零伪造Odometry；上游完整姿态融合仍使用0.01四元数分量噪声，位置标准差参数不改变这项权重。
+
+WSL Ubuntu24.04/Jazzy：新增12项GTest（3项几何、8项真实EKF库、1项ROS端到端）和原23项视觉/标定测试全部通过，共35项。覆盖非零/倾斜姿态、用户一帧对应的解析场景、q/-q交替、5Hz视觉延迟、200/250Hz IMU、平移/升沉、遮挡转向、异常时间、home重设及IMU断流不补状态；不是硬件传感器精度测试。三个自研包和两个上游依赖构建通过；两个新XML参数解析、YAML/RViz解析、含视觉节点的无界面总launch实际启动和SIGINT正常退出通过；Pi只构建bringup的包选择在WSL复现通过，不称ARM编译。真实Pi/lab融合和RViz窗口尚待用户运行。首次12s初始化试验未通过，原库倾斜方差还未收敛；保留原门槛，延长观察后5Hz的两个场景首次READY为26.00/30.97s，ROS例home约25.01s。正式C++测试保留；临时合成内参/启动夹具已清理，build/install/log由Git忽略。
 ## 14. 当前 USTROV 手柄开环与 ROV_Control 接入边界（2026-10-27）
 
 **证据范围。** 用户报告平台已搭建，Linux 操作站 lab 经网线连接 Pi，运行以下 USTROV 入口实施手柄开环。本次读取本地子模块 HEAD `f22f647`；相对历史验收的 `b1208e5`，主要新增有线 DDS 部署、只读 OLED 和手柄四轴增益 51.42，core/bridge/mixer 主逻辑未变。本次没有远程读取两台设备的实际安装版本、重跑控制或修改参数；用户报告不能替代逐项标定记录。旧 §11.13–11.18 是 10-12 的历史检查，不再作为“平台至今未能开环”的判断。

@@ -1,6 +1,6 @@
 # 路径规划与轨迹跟踪：从水平到点到 MPC
 
-更新：2026-10-06。参数与检查职责整理见 §6.1。A/B/C1 及水平 XY 到点闭环已实现。用户授权完成在环部分，并明确选择沿用 Hippo 四推进器、深度仅监测。本文 §1–8 是当前实现；§9–11 保留预览和有限输入入口的具体设计。原先拟议的空控制接口、normalized effort PD 和上游姿态库封装方案已由当前物理分配方案替代，不创建这些空类。
+更新：2026-11-03。视觉原型实验的现行顺序与下一批函数设计见 §13.13；旧静止/尺量方案是可选检查，不再作为 ROS 接入的前置门槛。参数与检查职责见 §6.1。A/B/C1 及水平 XY 到点仿真闭环已实现，深度仅监测。本文 §1–8 是当前实现；§9–11 保留预览和有限输入入口的具体设计。真机闭环尚未实现，不由此次视觉设计自动授权执行电机。
 
 ## 1. 系统目标
 
@@ -433,7 +433,7 @@ WAIT_STATE→READY→显式 start→RUNNING→FINISHED。FINISHED 仅表示输�
 
 C1 没有加入死区补偿；后续水平闭环已按 §5.3 对原模型做静态曲线逆映射，并通过实际 Gazebo 验证。它不等于真实推进器标定。MPC 仍需建模实际输入/响应关系；真机需独立状态/执行适配和看门狗。
 
-## 12. 真机迁移与透明水缸视觉方案（视觉未实施；10-07逐电机工具见§12.10）
+## 12. 真机迁移与透明水缸视觉历史方案（当前视觉实现见§13，逐电机工具见§12.10）
 
 ### 12.1 系统目标与已知条件
 
@@ -598,7 +598,7 @@ CMake选项ROV_BUILD_PX4_MOTOR_PROBE默认OFF，显式ON才要求px4_msgs并编�
 
 验证顺序：纯C++波形/ROS与实际桥协议测试→真机断动力验链→水中固定推进器短脉冲、方向/死区→按README§11.12接状态和简单闭环。测力装置标定正反推力改为物理精度确有需要时的可选工作。本批实际编译/运行证据和可执行步骤集中于README§11；没有真机接入、PWM/ESC和水动力验证。原仿真C1/到点实现保持独立入口。
 
-## 13. 机载视觉定位实施计划（2026-10-07设计，待确认实现）
+## 13. 机载视觉定位实施计划（分批实施：标定/只读ROS已完成，机体状态与闭环待后续）
 
 ### 13.1 目标、硬件与完成边界
 
@@ -694,9 +694,9 @@ PoseObservation包含stamp_ns、p_W[3]、q_WB[4]、covariance[6×6]、tag_count�
 
 ### 13.6 验收与后续接控制的边界
 
-每个实际可用高度，在中心、近边缘及标签交接位置静止录制，再沿有刻度工装移动5/10cm；检查已知位置偏差、静止标准差、轴向/尺度、航向变化、可见标签数、误差分布、最长丢标及延迟。校准数据和验收位置分开；手持移动只检查方向，精度结论需固定参考。记录actual working envelope，不以16个标签证明全缸覆盖。
+以下是后续精度评价的可选方法，11-03起不再作为ROS原型前置：在不同高度/位置做固定静止或已知位移，检查偏差、散布、方向/尺度、丢标和延迟。手动移动可查方向与量级，不能给出独立绝对精度；16张标签也不自动证明全缸覆盖。当前实际实验顺序以§13.13和README§13.14为准。
 
-可将水平绝对误差约1cm以内、静止标准差约5mm以内、航向约2°以内、图像到pose延迟P95约100ms以内作为首轮低速试验的讨论目标；这是待确认/实测的工程预算，不是相机承诺或已有结果，也不能只达到P95就忽略长尾中断。以0.05m/s为例，100ms延迟对应约5mm位移，后续控制速度/允许误差须据此一起选择。
+此前1cm绝对误差/5mm静止散布/2°航向/100ms延迟只是未确认的讨论预算，现不作为原型门槛。按目标行程、可用余量和实测延迟选择合理容差与低速；例如0.05m/s与100ms相乘为5mm运动量，只是预算示例。先核方向与尺度量级、真实更新和断图行为，再依据任务结果改善精度/速率。
 
 遮挡标签、断开图像、重复/倒退时间戳、错误CameraInfo、未知ID时，确认没有持续伪新定位；恢复后检查绝对地图定位与跳变。平面位姿翻转或湿光路尺度偏差不能靠低通滤波隐藏；先改观测模型、工作区域或安装/照明。当前无DVL不阻止已知标签可见时的定位，但标签完全丢失后不能宣称长时间准确水平定位。
 
@@ -797,7 +797,7 @@ K为3×3，fx/fy/cx/cy单位px；首版明确采用pinhole模型，D顺序k1,k2,
 
 **输出/维护。** 新结果目录建议~/vision_data/calibration_wet_01/results_01/，已有wet_01.mkv保持只读。配置与正式源码/测试入Git，原始视频/参数试验结果/CSV在工作区外数据目录，构建/log按既有规则忽略。只更新README和本设计，不新增重复阶段.md。真实测得K/D以后显式转换到ROS CameraInfo/运行配置；不通过改后缀或frame字符串冒充适配。
 
-**验证顺序与边界。** 已用已知K/D和多倾角合成投影核角点/拟合/退化拒绝，再用真实36h11图案旋转核ID/p序，正式测试保留。lab随后实际处理了原视频并提供候选XML/报告/CSV，结果见README§13.10；本机未读取原视频，不把候选XML当水中定位验收通过。候选参数还需独立50/100mm尺量位移及不同高度/边缘验证，必要时增加已测小片多标签或评估模型。map/T_BC和只读定位在之后批次。
+**验证顺序与边界。** 已用已知K/D和多倾角合成投影核角点/拟合/退化拒绝，再用真实36h11图案旋转核ID/p序，正式测试保留。lab随后实际处理了原视频并提供候选XML/报告/CSV，结果见README§13.10；本机未读取原视频，不把候选XML当水中定位验收通过。独立尺量和高度/边缘检查可用于精度评价；11-03不再将其作为ROS原型前置，当前顺序见§13.13。
 
 用户随后明确“继续执行”，本节范围已授权并实现。真实使用与软件验证结果集中README§13.8；在线视觉各节点仍是候选设计，未自动扩展实施。新增源代码经过clang-format，详细中文注释；没有修改USTROV或控制链。
 
@@ -830,4 +830,146 @@ K为3×3，fx/fy/cx/cy单位px；首版明确采用pinhole模型，D顺序k1,k2,
 
 **采样/状态。** read成功的一帧触发一次detect和estimate，顺序计算、写行、显示；无ROS定时器/回调/额外控制线程。detect内部线程同步等待返回。视频time_s由帧号/文件FPS，相机为read返回后steady_clock相对首帧；都不是曝光时间或控制时钟。本批不计算速度/控制dt。processing_ms不含采集等待、GUI和落盘。进程每次构造初始化状态，不存在位置归零服务或跨ID自动home。
 
-**假设/验证。** 标签固定且80mm几何可信，原图模式/光路与XML一致；L不是ENU/NED、map或机体。平面两解误差差<=0.15px且旋转差>=5°则valid=false/ambiguous_pose，选值只是启发式而非可观测性保证，不借历史滤波隐藏翻转。独立50/100mm水平位移、高度和静止记录验证后再评估地图/T_BC/ROS状态。前一轮K/D与本轮合成测试不能替代真实水下精度。操作和已运行范围集中README§13.11，不新增重复阶段文档。
+**假设/验证。** 标签固定且80mm几何可信，原图模式/光路与XML一致；L不是ENU/NED、map或机体。平面两解误差差<=0.15px且旋转差>=5°则valid=false/ambiguous_pose，选值只是启发式而非可观测性保证，不借历史滤波隐藏翻转。11-03用户明确以原型效率为先：独立50/100mm和固定静止记录改为可选精度检查，直接推进§13.13的ROS位姿接入；闭环前仍须确认方向、尺度量级和数据新鲜度。前一轮K/D与本轮合成测试不能替代真实水下精度。操作和已运行范围集中README§13.11，不新增重复阶段文档。
+
+### 13.12 机载相机部署接法更正（2026-11-02）
+
+用户已明确相机固定ROV、USB接Pi、Linux笔记本有线连接Pi。运行位置改为Pi本机：VideoCapture读Pi的/dev/videoX，原detect/estimate/CSV函数链保持原样，笔记本SSH仅操作/显示终端并scp取数据。aarch64须由Pi原生编译源码，不复制x86 build；设备路径现场确认。默认display=false不要求Pi有桌面；可选ssh -X以现有showPose显示窗口，X11条件和性能需现场确认。本轮未新增或改动C++/ROS接口，只补README§13.12分终端操作。
+
+相机刚性安装只改变实验操作：可手动平移整台ROV检查位姿变化，不要求提前测T_BC；旋转会引入杆臂位移，机体中心位姿仍需安装外参。数据原点仍是固定标签L，未因相机上机变成home或map。随后用户Pi水中采集/求解已得到真实记录（README§13.13），X11、端到端时延及米制精度仍未验证；后续部署方案见下节。
+
+### 13.13 面向实际水缸的最小原型计划与函数设计（2026-11-03，本批已实施）
+
+**任务和范围。** 用户要求基础可运行、误差满足实验需要，不以计量级精度工程为目标。现有湿标定XML、80mm标签和97帧连续有效记录足以继续ROS接入；固定静止统计、100mm专门试验、全16张地图、复杂滤波和完整测力均不作本批前置。最终首个运动任务是沿135cm长边、小范围、近固定航向到点，深度先监测。水缸宽65cm，按当前Hippo式控制接口不预设独立横移推力；实际安装轴向仍待核对，暂不安排大转弯、任意XY轨迹或三维保持。5～10cm前向目标是拟用起步量级，实际取值须落在完整标签视野和机体可用余量内。
+
+**批次与复用。**
+
+1. 本批：实时单标签相机位姿→ROS→笔记本RViz，推进器不动作。复用AprilTagDetector、TagPoseEstimator、loadCameraModel/loadTagPoseOptions，继续用ID16及原K/D，不重写检测或PnP。
+2. 后批：配置粗测相机安装T_BC，把相机位姿变成机体位姿；定义Z向上的局部世界W、固定标签T_WL，建立第一次有效机体定位的home。复核USTROV IMU/压力和C++ EKF接口，再选择最低限度的速度/角速度来源；不能把缺少的速度填零接控制器。
+3. 后批：只读运行真机控制计算，再验证低幅方向与停机，最后5～10cm纵向到点。既有PointTrackingNode参数入口强制use_sim_time=true，且自带Hippo物理分配；保留该仿真入口，真机另做薄适配，复用已核实的USTROV执行桥。一次只能有一个命令源。
+4. 需要跨标签运动时才测相邻2～4张ID的位置/朝向，加入局部地图；不为了第一步测齐16张，也不切ID就重置原点。
+
+**实际部署选择。** Hippo当前官方文档使用Pi发布压缩图像、板外PC检测定位。考虑实测Pi现有工具约2.3Hz，本批按同一部署方式设计：Pi复用现成C++ usb_cam采集，lab运行自研薄ROS包装与RViz。11-03用户日志确认Pi的usb_cam 0.8.1拒绝旧配置mjpeg并退出；上游raw_mjpeg直通也有已报告的分支不匹配，当前改用mjpeg2rgb解码为RGB，再由compressed_image_transport编码JPEG发送。分辨率、源header及lab接口保持，Pi多一次解码和编码，性能待实测；不再将当前路径称为原始MJPEG直通。现有本地USTROV工作区仍无visual_localization源码包，不能直接声称整套Hippo视觉EKF已经运行。这里复用Hippo部署思路及现有AprilTag/OpenCV求解；暂不引入上游Python视觉EKF或另一个重复检测节点。
+
+~~~text
+Pi: USB相机MJPEG → usb_cam解码RGB → 压缩插件编码JPEG（1280×720，保持湿标定光路）
+                   ↓ /uuv00/vertical_camera/image_raw/compressed
+                   ↓ 以太网DDS，保留源图像header.stamp
+lab: TagPoseNode::onImage → JPEG解码 → 灰度 → detector.detect
+                                          → estimator.estimate
+     camera_wet.xml + tag_pose_options.yaml ──────┘
+             ├ valid → /uuv00/vision/camera_pose（PoseStamped）+ TF
+             ├ 每帧状态/处理耗时 → /uuv00/vision/diagnostics
+             └ 原图叠角点 → /uuv00/vision/debug_image（仅lab本地显示）
+     RViz/rqt查看；rosbag按需记录图像、位姿和诊断
+~~~
+
+**文件、类和函数。用户已确认并实施为0.3.0，下表为本批实现；后续机体变换/融合/控制仍另批。**
+
+| 新增或修改文件（相对src） | 函数/入口 | 输入、输出与内部状态 |
+|---|---|---|
+| rov_localization/include/rov_localization/tag_pose_node.h；src/tag_pose_node.cpp | TagPoseNode构造、loadConfig() | 读取XML路径、现有TagPoseOptions路径、frame_prefix、超时及调试开关；由prefix与目标ID派生frame名；初始化只读求解器、唯一检测器、订阅器、发布器和250ms健康定时器。参数启动只读，构造失败报告具体配置，不假造内参 |
+| 同上 | onImage(CompressedImage) | 检查源frame、递增时间和JPEG/尺寸，解码为原始BGR/灰度，调用detect→estimate；单帧局部数据不跨帧复用。更新最后输入时间/计数/当前原因，通过检查才调用publishPose；每次处理后publishDiagnostics，按开关publishDebugImage |
+| 同上 | publishPose(estimate, source_header) | p_LC与R_LC→米、单位四元数PoseStamped；header.frame_id=uuv00/tag_16，时间沿用输入。TF为tag_16→vision_camera_optical，使用独立显示子帧避免与USTROV base_link→camera的静态TF发生双父冲突 |
+| 同上 | publishDebugImage(image, detections, estimate, header) | 原图叠ID/角点序号和有效状态，用sensor_msgs/Image供lab本地查看；不去畸变后再用原D计算。不重写检测/求解，图像状态与本帧一致 |
+| 同上 | publishDiagnostics()、onHealthTimer() | 发布ID、valid/reason、收到/处理数量、解码/检测/PnP耗时及最近输入距今时间。steady_clock检查断图；定时器只更新状态，不重新发布旧位姿或TF |
+| rov_localization/src/tag_pose_node_main.cpp | main(argc,argv) | rclcpp::init→构造节点→单线程spin→shutdown；不封装算法，无控制输出 |
+| rov_localization/CMakeLists.txt、package.xml | ROS构建/安装 | 保留WITH_AMENT=OFF的两个离线CLI；ament模式增加上述节点及rclcpp、sensor_msgs、geometry_msgs、diagnostic_msgs、tf2_ros等必要依赖；OpenCV解码用imgcodecs；数学库仍不依赖ROS |
+| rov_bringup/config/usb_camera.yaml | usb_cam参数 | Pi设备/dev/video0、1280×720、MJPEG、受设备支持的帧率、optical frame；配置不证明实际帧率。原分辨率保持，避免随意缩图后误用K |
+| rov_bringup/config/tag_pose_ros.yaml | ROS包装参数 | 原XML/选值文件的路径、frame、话题、断图提示和调试开关；不复制一套K/D或质量门槛。driver若无已标定CameraInfo，本节点不使用其零内参，明确以XML为模型源 |
+| rov_bringup/launch/usb_camera.launch | XML启动 | 仅在Pi启动usb_cam，图像话题按vehicle_name组织；不启动core/解锁/控制 |
+| rov_bringup/launch/tag_pose_view.launch；rviz/tag_pose.rviz | XML启动与RViz | lab启动TagPoseNode和可选RViz，固定帧tag_16、显示相机Pose/TF/调试图；不把tag_16叫map/home |
+| rov_bringup/package.xml | 运行依赖 | 声明新增定位与相机启动依赖；已有CMake安装launch/config/rviz目录可复用 |
+| rov_localization/test/test_tag_pose_ros.cpp | 正式ROS接口测试 | 合成JPEG+已知K/D输入→位姿坐标/四元数/源时间；无标签/重复时间/尺寸错误/断图不产新位姿，恢复后可继续。不把这些软件测试写成实机精度证据 |
+
+**时间、状态和并发。** 相机驱动是独立进程。定位单线程executor；onImage与onHealthTimer串行访问成员，原生AprilTag内部线程同步返回，不直接修改ROS状态。订阅采用sensor-data、keep_last(1)处理积压时的最新样本；这限制本地队列但不保证驱动/网络无积压。只保留最后输入源时间、接收steady时间、最后有效接收时间、计数和诊断原因，不维护预测轨迹。启动清空这些状态；换ID/光路参数重启；本批无reset服务、home或控制周期。首帧开始正常观测；坏帧停止新位姿输出并说明原因；断图定时报告。RViz可能保留最后显示，应同时看诊断/时间戳。
+
+驱动时间不预先称曝光时间。pose保留源图像stamp，处理耗时用本机steady_clock；Pi/lab未确认时钟一致前不把now-stamp当端到端延迟。后批接反馈前核对两机时间、输入新鲜度与实际更新间隔；可将同一节点迁回Pi，无需重写数学层。本批不发布Odometry，不填零速度/零协方差冒充完整状态；ROS标量姿态以四元数为主，角度文本仅显示。
+
+**下一批外参的明确边界。** T_AB定义为把B系点变到A系。现有求解输出T_LC；相机安装T_BC实测/粗测后，机体位姿T_LB=T_LC·inverse(T_BC)，在约定世界系中为T_WB=T_WL·T_LB。标签局部L并不保证Z向上；进入Hippo估计器前必须通过T_WL对齐坐标和高度基准，不能直接重命名为map。home取第一次有效机体位姿位置与初始水平航向，和硬件通电时间区分。先用尺量安装平移和确认安装朝向即可，不要求复杂手眼标定。
+
+11-03用户提供安装粗量并确认FLU（此前FRU为笔误）：定位机体B暂以飞控板中心为原点，+X以Pixhawk前向箭头为准；镜头位于后方5cm/下方12.5cm，竖直向下，图像上方对应机体右侧。在FLU中t_BC=(-0.050,0,-0.125)m；光学X图像右/Y图像下/Z镜头前给出X_C=-X_B、Y_C=+Y_B、Z_C=-Z_B，因此R_BC=diag(-1,1,-1)，ROS顺序四元数(x,y,z,w)可取(0,1,0,0)。此安装模型由用户粗量与朝向描述确定，不是独立外参标定。飞控板中心并不自动等于质心或内部IMU测量点。后续位置换算p_LB=p_LC-R_LB·t_BC，R_LB=R_LC·R_BCᵀ；必须先把安装偏移旋转到L，不能把B中的三维偏移直接加到标签系位置。机体/home函数设计见§13.14，尚未创建实现。
+
+**本批实际实验。** 仍用ID16完整可见的约25cm附近位置：手动小幅前/后、左/右、转动，lab看图像与位姿方向；粗量一个位移只查尺度量级，不要求单独精密台架或反复CSV。遮挡一次应停止新pose，恢复可继续；记录实际更新率与明显延迟。先提出3～5cm级的小范围任务误差作为后续原型讨论预算，而非实测精度或固定验收标准；若目标行程同样只有5cm，必须有更小的不确定性或改成更有分辨意义的行程。几何错误、旧数据冒充新数据和电机方向错误不能靠放宽精度预算掩盖。
+
+用户确认后完成0.3.0实现：三个C++源/头文件及正式ROS测试、两个XML launch/两份配置/RViz、构建依赖。数学求解和旧CLI保持原实现。消息使用标准类型；调试BGR图直接填Image，不额外引入cv_bridge；frame_prefix启动只读。5项ROS接口测试与18项旧测试共23项通过，两个launch参数解析及只读定位节点实际启动/退出通过；临时数据清理，正式C++测试保留。尚未接用户USB/Pi或验证跨机/RViz真实窗口，操作与证据见README§13.15。最终Pi独立计算仍是用户目标，运行位置可切换，不把当前约2.3Hz当硬件上限。
+
+### 13.14 机体观测、Hippo EKF 与融合 home（2026-11-03）
+
+用户已确认实施。原纯视觉 home 设计由本节替代：唯一正式 home 建立在融合状态之后。自研新增独立 `rov_state_estimation` 包，几何、算法适配和 ROS 接口分层；已有 `rov_localization` 的检测/PnP 保持职责，不复制或改写上游 EKF。`tag_pose_view.launch` 仍能单独预览相机，新 `hippo_fusion.launch` 组合视觉与融合。当前只读定位，不接电机或仿真 PointTrackingNode。
+
+**坐标与数据契约。** `T_AB` 把 B 系坐标变到 A 系；平移米，角度弧度，四元数 ROS/YAML 为 xyzw，Eigen 构造为 wxyz。
+
+- B：飞控板中心，FLU，X 前/Y 左/Z 上，前方以 Pixhawk 箭头为准。
+- C：相机光学 X 右/Y 下/Z 前。已知相机后5cm、下12.5cm、镜头向下、图像上方朝机体右；`t_BC=(-.050,0,-.125)m`，`R_BC=diag(-1,1,-1)`。
+- L：ID16 原生标签系；W：该标签中心的局部 Z 向上坐标，`R_WL=diag(1,-1,-1)`，`t_WL=0`。平贴水平缸底为当前假设，W 不赋予东/北地理方向。
+- H：融合初始化通过后的首个机体位置和水平航向；Z 保持向上，启动 roll/pitch 仍保留。它是软件完成初始化的原点，不是从电源上电瞬间追溯的位置。
+
+~~~text
+R_LB = R_LC * R_BC.transpose()
+p_LB = p_LC - R_LB * t_BC
+R_WB = R_WL * R_LB
+p_WB = R_WL * p_LB + t_WL
+p_HB = R_WH.transpose() * (p_WB - p_WH)
+R_HB = R_WH.transpose() * R_WB
+~~~
+
+压力初始化寻找源时间差不超过 `pair_tolerance_s` 的视觉机体高度 z0 与压力 P0，后续 `z = z0 - (P-P0)/(rho*g)`：P 为 Pa，rho 为水密度 kg/m³，g=9.81m/s²，z 为标签平面上方高度 m。因此允许直接在水中启动，无须把首次压力误认为水面。当前把压力感测点相对飞控中心的高度变化近似为一致；不包含压力安装杆臂补偿或传感器比例标定，大角度姿态时应另核该误差。
+
+**输入输出。** 以下位于 `/uuv00` 命名空间，车辆名前缀可配置。
+
+| 话题 | 类型、坐标与单位 | 用途 |
+|---|---|---|
+| `vision/camera_pose` | PoseStamped，L 中的光心位姿 | 原 TagPoseNode 发布，源时间来自 Pi 图像 |
+| `imu` | Imu，FLU，比力 m/s²、角速度 rad/s | USTROV 桥已完成 FRD→FLU，忽略其无效 orientation |
+| `pressure` | FluidPressure，Pa | 原桥压力观测，来源/比例需现场确认 |
+| `vision/body_pose` | PoseStamped，W 中的飞控板中心 | 纯视觉观测，供比较 |
+| `state/pose` | PoseStamped，W 中的融合机体 | 初始化通过后发布；观测过期时可继续惯性预测，诊断降级 |
+| `state/pose_home` | PoseStamped，H 中的融合机体 | home 初始化后发布 |
+| `state/velocity_body` | TwistStamped，B 中的线速度 m/s 与角速度 rad/s | 线速度从 EKF 世界速度旋转；角速度为 IMU 减 EKF 陀螺偏置 |
+| `state/diagnostics` | DiagnosticArray | 状态、输入时间、压力对齐、home、拒收原因、倾斜方差 |
+| `state/reset_home` | Trigger 服务 | 清 home，等待请求后的新视觉与就绪融合输出重建，不重置 EKF/压力基准 |
+
+没有发布 Odometry：原库不导出完整 P 矩阵，不能以全零协方差冒充精度，也没有为了调用仿真控制器伪造其状态契约。将来控制接入可直接消费已有 pose/twist 并增加对应新鲜度和权限检查，另批设计。
+
+TF：`vision_world → tag_16 → vision_camera_optical` 为视觉显示支路；`vision_world → home → fused_body` 为融合支路。tag 变换静态发布；home 值在重设前固定，但随融合状态源时间动态发布，支持显式重设。使用 fused_body 避免与 USTROV 已有 base_link 的父子关系冲突。
+
+**文件和函数。** 路径相对 `ROV_Control/src/rov_state_estimation`。
+
+| 文件/类 | 关键函数 | 输入、输出、内部状态与调用关系 |
+|---|---|---|
+| `include/.../frame_adapter.h`、`src/frame_adapter.cpp` / FrameAdapter | `cameraToBody` | 上列外参链，输入 T_LC、输出 T_WB；无检测/滤波 |
+| 同上 | `isValid`、构造函数 | 检查有限值、单位四元数和固定安装变换 |
+| 同上 | `initializeHome`、`toHome`、`resetHome`、`home`、`config` | 仅保存固定配置和可选 T_WH；航向水平投影小于0.1时等待，不用初始倾斜定义水平系 |
+| `include/.../hippo_fusion.h`、`src/hippo_fusion.cpp` / HippoFusion | 构造函数 | 校验参数，持有上游 Ekf、观测缓存、时间/积分累积量、初始化和故障状态 |
+| 同上 | `setVision`、`setPressure` | 检查有限值、单调源时间与相对 IMU 时间窗口，缓存新观测；不积分、不重发旧观测 |
+| 同上 | `tryAlignPressure` | 选相近时间的一对视觉高度/压力，保存 z0/P0，仅建立一次 |
+| 同上 | `pushImu` | 首帧只设时间基准；后续按实际dt分段积分，补齐严格10ms后调用updateFilter；例如250Hz的4+4+4ms被分为10ms窗口与2ms余量 |
+| 同上 | `updateFilter` | 每个10ms窗口：SetImuData→feedObservations→Ekf::Update→读取输出→updateReadiness；返回最新融合结果 |
+| 同上 | `feedObservations` | 逐条送入未处理压力及最新未处理视觉；压力换高度，视觉同半球四元数与时间兼容补偿，调用 SetBaroData/SetVisionData |
+| 同上 | `updateReadiness` | 观测新鲜、上游 AttitudeValid、等待启动时间、融合接近视觉持续0.5s后置 initialized；之后丢观测只降级，不重建home；观测恢复且融合/视觉重新接近才恢复READY |
+| 同上 | `reject`、状态/getter 函数 | 统计拒收原因；IMU时间缺口超限或非有限滤波结果锁定故障，需要重启节点 |
+| `include/.../fusion_node.h`、`src/fusion_node.cpp` / FusionNode | `loadConfig`、构造函数 | 只读参数、三订阅、四状态输出、诊断、两种TF、服务、250ms健康定时器 |
+| 同上 | `onCameraPose` | 核frame→cameraToBody→setVision→发布视觉机体观测，保留相机源stamp |
+| 同上 | `onPressure`、`onImu` | 核frame，分别缓存压力/推动EKF；只有新IMU推动状态发送，忽略Imu.orientation占位 |
+| 同上 | `publishState` | 发布源时间状态；把世界线速度旋到B；就绪时初始化home；发布home位姿与TF |
+| 同上 | `publishStaticTag`、`publishDiagnostics`、`onResetHome` | 静态地图关系、健康检查、显式home重设；定时器不补发旧pose |
+| `src/fusion_node_main.cpp` | `main` | init→构造→单线程spin→shutdown；启动参数错误报告退出 |
+| `test/test_hippo_fusion.cpp` | 正式几何/EKF测试 | 独立解析真值、真实上游库、延迟5Hz视觉、200/250Hz IMU、压力、运动/遮挡/时序 |
+| `test/test_fusion_ros.cpp` | 正式ROS测试 | 合成数据经DDS进入实际节点，检查home服务、frame/stamp、停止IMU后不补状态 |
+
+Bringup 新增 `config/hippo_fusion.yaml`、`launch/hippo_fusion.launch`、`launch/sensors_readonly.launch`、`rviz/hippo_fusion.rviz`；package.xml 增加新包运行依赖。前一个入口复用原视觉节点；后一个直接启动现有只读传感器桥，可选 Agent，与已有 core 二选一。
+
+**时间、线程和适配边界。** 三类 header 均须处于 Pi 的 ROS 系统时间基准。已有桥用首次 PX4 boot time 与 Pi now 的差建立固定偏移；相机同在 Pi。lab 的接收时刻仅用于通信健康检查，不参与积分。Pi 桥重启/时钟跳变后应重启融合。原库按10ms周期构建状态与协方差，本层按源时间把IMU间隔切分并积累到严格10ms，区间采用当前采样值矩形积分；200Hz/250Hz输入均已测试，实际低频/大抖动输入仍需核验，不宣称配置100Hz就是实测100Hz。
+
+原 `SetVisionData` 会减 `vision_delay_us + 5ms`，且 buffer 长度又依赖该参数。本层保留 `history_s` 长度，并在库入口补回相同量，使库中观测时间仍是相机源时间，不重复补偿延迟；超出历史窗口的视觉明确拒收。库内部视觉超时仍沿用其实现，本层独立以原始源时间给出READY/DEGRADED，避免把预测当新视觉。
+
+所有回调/服务/诊断由单线程 executor 串行执行，只有它修改节点和融合缓存；上游 EKF 同步调用，没有另建控制线程。AprilTag 原有内部线程属于另一视觉进程，本包不参与。第一次有效输出初始化home；reset_home仅清其存储并记录当时视觉stamp，必须等更新观测后重建；遮挡恢复保留home。IMU缺口超过0.10s锁故障，不虚构缺失积分。
+
+### 13.15 复用的上游实现与保留边界
+
+本轮使用本地 USTROV f22f647 的 `ustrov_state_estimation` 计算库；未修改子模块源码或指针。`Estimator` 原ROS包装未启动，因其压力首30帧按水面归零、输出硬编码map/协方差未实现/速度无frame，与当前实验契约不一致。
+
+`Ekf::PredictState` 使用角速度积分姿态、比力积分速度并扣重力；`UpdateHeightFusion` 默认压力高度；`UpdateVisionFusion` 用视觉XY与完整四元数校正。`FuseOrientation` 仍使用固定0.01四元数分量噪声，本层 `vision_position_std_m` 只调位置噪声，不冒称能调其姿态权重；本层在输入处处理 q/-q 同姿态符号。它是当前库的16维四元数分量EKF，不称为新写的15维ESKF或VINS。
+
+压力真实单位/来源、相机粗外参、真实处理延迟仍由现场只读实验检查；本轮的软件验证及操作集中在README§13.17。单标签可见区是当前定位范围，遮挡期间惯性预测会漂移；没有全16标签地图、真实水下真值精度验收或自动控制。本次不新增这些实验前置条件。

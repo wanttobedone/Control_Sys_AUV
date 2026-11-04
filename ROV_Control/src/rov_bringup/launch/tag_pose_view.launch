@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 默认在lab运行；也可原样放Pi，设start_rviz/publish_debug_image=false。 -->
+  <arg name="vehicle_name" default="uuv00"/>
+  <arg name="camera_file" description="已有湿标定camera_wet.xml的绝对路径，必填" default="$(env HOME)/vision_data/calibration_wet_01/results_03/camera_wet.xml"/>
+  <arg name="options_file" default="$(find-pkg-share rov_localization)/config/tag_pose_options.yaml"/>
+  <arg name="config_file" default="$(find-pkg-share rov_bringup)/config/tag_pose_ros.yaml"/>
+  <arg name="start_rviz" default="true"/>
+  <arg name="publish_debug_image" default="true"/>
+  <!-- 实际pose帧由options中的ID派生；修改ID时也将RViz固定帧改为对应tag_N。 -->
+  <arg name="fixed_frame" default="$(var vehicle_name)/tag_16"/>
+  <node pkg="rov_localization" exec="tag_pose_node" name="tag_pose"
+        namespace="$(var vehicle_name)" output="screen">
+    <param from="$(var config_file)"/>
+    <param name="camera_file" value="$(var camera_file)"/>
+    <param name="options_file" value="$(var options_file)"/>
+    <param name="frame_prefix" value="$(var vehicle_name)"/>
+    <param name="publish_debug_image" value="$(var publish_debug_image)"/>
+    <param name="use_sim_time" value="false"/>
+  </node>
+  <node if="$(var start_rviz)" pkg="rviz2" exec="rviz2" name="vision_rviz"
+        namespace="$(var vehicle_name)" output="screen"
+        args="-d $(find-pkg-share rov_bringup)/rviz/tag_pose.rviz -f $(var fixed_frame)">
+    <param name="use_sim_time" value="false"/>
+    <remap from="/vision_preview/camera_pose" to="/$(var vehicle_name)/vision/camera_pose"/>
+    <remap from="/vision_preview/debug_image" to="/$(var vehicle_name)/vision/debug_image"/>
+  </node>
+</launch>

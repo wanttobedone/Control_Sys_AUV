@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- lab：检测/PnP + 融合 + 可视化；Pi：另启采集、只读传感器桥。 -->
+  <arg name="vehicle_name" default="uuv00"/>
+  <arg name="camera_file" default="$(env HOME)/vision_data/calibration_wet_01/results_03/camera_wet.xml"/>
+  <arg name="options_file" default="$(find-pkg-share rov_localization)/config/tag_pose_options.yaml"/>
+  <arg name="fusion_config" default="$(find-pkg-share rov_bringup)/config/hippo_fusion.yaml"/>
+  <!-- 改 options 中 target_id 后同步此帧；错配时节点会明确拒绝，不混用标签原点。 -->
+  <arg name="tag_frame" default="$(var vehicle_name)/tag_16"/>
+  <arg name="start_vision" default="true"/>
+  <arg name="start_rviz" default="true"/>
+  <arg name="publish_debug_image" default="true"/>
+  <include if="$(var start_vision)" file="$(find-pkg-share rov_bringup)/launch/tag_pose_view.launch">
+    <arg name="vehicle_name" value="$(var vehicle_name)"/>
+    <arg name="camera_file" value="$(var camera_file)"/>
+    <arg name="options_file" value="$(var options_file)"/>
+    <arg name="start_rviz" value="false"/>
+    <arg name="publish_debug_image" value="$(var publish_debug_image)"/>
+  </include>
+  <node pkg="rov_state_estimation" exec="hippo_fusion_node" name="hippo_fusion"
+        namespace="$(var vehicle_name)" output="screen">
+    <param from="$(var fusion_config)"/>
+    <param name="frame_prefix" value="$(var vehicle_name)"/>
+    <param name="tag_frame" value="$(var tag_frame)"/>
+    <param name="use_sim_time" value="false"/>
+  </node>
+  <node if="$(var start_rviz)" pkg="rviz2" exec="rviz2" name="fusion_rviz"
+        namespace="$(var vehicle_name)" output="screen"
+        args="-d $(find-pkg-share rov_bringup)/rviz/hippo_fusion.rviz -f $(var vehicle_name)/home">
+    <param name="use_sim_time" value="false"/>
+    <remap from="/fusion_preview/pose" to="/$(var vehicle_name)/state/pose_home"/>
+    <remap from="/fusion_preview/visual" to="/$(var vehicle_name)/vision/body_pose"/>
+    <remap from="/fusion_preview/debug_image" to="/$(var vehicle_name)/vision/debug_image"/>
+  </node>
+</launch>

@@ -1,0 +1,7 @@
+/**:
+  ros__parameters:
+    # camera_file和options_file由launch传入绝对路径。
+    # 内参来自camera_wet.xml，尺寸/质量阈值来自已有tag_pose_options.yaml，避免两份配置。
+    frame_prefix: uuv00
+    image_timeout_s: 2.0
+    publish_debug_image: true
