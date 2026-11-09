@@ -66,7 +66,7 @@ FusionNode::FusionNode(const rclcpp::NodeOptions &options) : Node("hippo_fusion"
   // 健康定时器只发诊断；IMU 中断时绝不靠它继续发布带新时间戳的旧状态。
   health_timer_ = create_wall_timer(std::chrono::milliseconds(250),
                                     std::bind(&FusionNode::publishDiagnostics, this));
-  RCLCPP_INFO(get_logger(), "只读 Hippo EKF：等待 IMU、压力和 %s；初始化时保持 ROV 静稳",
+  RCLCPP_INFO(get_logger(), "只读 Hippo EKF（诊断v2）：等待 IMU、压力和 %s；具体就绪条件见 state/diagnostics",
               tag_frame_.c_str());
 }
 
@@ -256,6 +256,7 @@ void FusionNode::publishDiagnostics()
     state = received_imu_ ? "IMU_RECEIVE_STALE" : "WAIT_IMU";
   }
   const bool ready = last_ready_ && !imu_stale && state == "READY";
+  const auto &checks = fusion_->diagnostics();
   diagnostic_msgs::msg::DiagnosticArray msg;
   msg.header.stamp = now();
   diagnostic_msgs::msg::DiagnosticStatus status;
@@ -271,6 +272,8 @@ void FusionNode::publishDiagnostics()
     status.values.push_back(item);
   };
   add("ready", ready ? "true" : "false");
+  add("diagnostics_version", "2");
+  add("initialized", fusion_->initialized() ? "true" : "false");
   add("home_ready", frames_->home() ? "true" : "false");
   add("pressure_aligned", fusion_->pressureAligned() ? "true" : "false");
   add("tilt_variance_rad2", std::to_string(fusion_->tiltVarianceRad2()));
@@ -283,12 +286,55 @@ void FusionNode::publishDiagnostics()
   add("frame_errors", std::to_string(frame_error_count_));
   add("last_frame_error", last_frame_error_);
   add("output_count", std::to_string(output_count_));
+  // filter_update_count 统计 EKF 已产生的有限输出，output_count 统计 ROS 状态发布。
+  // 两者分开后，初始化不通过时也能确认滤波确实正在计算。
+  add("filter_update_count", std::to_string(checks.filter_update_count));
+  add("readiness_blocker", checks.readiness_blocker);
+  add("gate_check_stamp_ns", std::to_string(checks.check_stamp_ns));
+  add("gate_vision_stamp_ns", std::to_string(checks.vision_stamp_ns));
+  add("gate_pressure_stamp_ns", std::to_string(checks.pressure_stamp_ns));
+  add("vision_age_s", std::to_string(checks.vision_age_s));
+  add("pressure_age_s", std::to_string(checks.pressure_age_s));
+  add("attitude_valid", checks.attitude_valid ? "true" : "false");
+  add("vision_fresh", checks.vision_fresh ? "true" : "false");
+  add("pressure_fresh", checks.pressure_fresh ? "true" : "false");
+  add("position_consistent", checks.position_consistent ? "true" : "false");
+  add("angle_consistent", checks.angle_consistent ? "true" : "false");
+  add("position_error_m", std::to_string(checks.position_error_m));
+  // 计算和参数仍用 rad，诊断额外用度数方便现场直接和安装角比较。
+  constexpr double radians_to_degrees = 180.0 / 3.14159265358979323846;
+  add("angle_error_deg", std::to_string(checks.angle_error_rad * radians_to_degrees));
+  add("position_tolerance_m", std::to_string(fusion_config_.startup_position_tolerance_m));
+  add("angle_tolerance_deg",
+      std::to_string(fusion_config_.startup_angle_tolerance_rad * radians_to_degrees));
+  add("vision_timeout_s", std::to_string(fusion_config_.vision_timeout_s));
+  add("pressure_timeout_s", std::to_string(fusion_config_.pressure_timeout_s));
+  add("history_s", std::to_string(fusion_config_.history_s));
+  add("startup_elapsed_s", std::to_string(checks.startup_elapsed_s));
+  add("startup_consistent_s", std::to_string(checks.startup_consistent_s));
+  add("last_imu_dt_s", std::to_string(checks.last_imu_dt_s));
+  add("imu_max_gap_s", std::to_string(fusion_config_.imu_max_gap_s));
+  add("fault_stamp_ns", std::to_string(checks.fault_stamp_ns));
+  add("fault_imu_gap_s", std::to_string(checks.fault_imu_gap_s));
+  add("fault_reason", checks.fault_reason);
+  add("gate_note", "last EKF check; frozen after fault/stall; current output vs latest visual pose");
   add("covariance", "upstream_not_exported_pose_twist_only");
   msg.status.push_back(status);
   diagnostic_pub_->publish(msg);
   if (state != last_reported_status_)
   {
-    RCLCPP_INFO(get_logger(), "%s", state.c_str());
+    // 仅在状态切换时打印摘要；完整快照仍每250ms发布，不因尚未READY而隐藏。
+    RCLCPP_INFO(get_logger(),
+                "%s | 阻塞=%s，位置差=%.3fm，姿态差=%.1fdeg，视觉年龄=%.3fs，连续通过=%.2fs",
+                state.c_str(), checks.readiness_blocker.c_str(), checks.position_error_m,
+                checks.angle_error_rad * radians_to_degrees, checks.vision_age_s,
+                checks.startup_consistent_s);
+    if (!checks.fault_reason.empty())
+    {
+      RCLCPP_ERROR(get_logger(), "首次故障=%s，源时间=%lldns，IMU间隔=%.6fs，允许=%.3fs",
+                    checks.fault_reason.c_str(), static_cast<long long>(checks.fault_stamp_ns),
+                    checks.fault_imu_gap_s, fusion_config_.imu_max_gap_s);
+    }
     last_reported_status_ = state;
   }
 }

@@ -973,3 +973,19 @@ Bringup 新增 `config/hippo_fusion.yaml`、`launch/hippo_fusion.launch`、`laun
 `Ekf::PredictState` 使用角速度积分姿态、比力积分速度并扣重力；`UpdateHeightFusion` 默认压力高度；`UpdateVisionFusion` 用视觉XY与完整四元数校正。`FuseOrientation` 仍使用固定0.01四元数分量噪声，本层 `vision_position_std_m` 只调位置噪声，不冒称能调其姿态权重；本层在输入处处理 q/-q 同姿态符号。它是当前库的16维四元数分量EKF，不称为新写的15维ESKF或VINS。
 
 压力真实单位/来源、相机粗外参、真实处理延迟仍由现场只读实验检查；本轮的软件验证及操作集中在README§13.17。单标签可见区是当前定位范围，遮挡期间惯性预测会漂移；没有全16标签地图、真实水下真值精度验收或自动控制。本次不新增这些实验前置条件。
+
+### 13.16 就绪检查与锁定故障的可观测性（2026-11-09用户确认）
+
+复用HippoFusion/FusionNode及上游Ekf，不增加节点或新的状态/控制话题。诊断通过已有`state/diagnostics`发出；只读快照与状态计算仍在同一ROS单线程执行器中访问，不增加锁或后台线程。
+
+| 文件/函数 | 输入、内部状态及输出 |
+|---|---|
+| `hippo_fusion.h` / `FusionDiagnostics`、`diagnostics()` | 保存最近一次检查源时间、参与检查的视觉/压力时间、年龄、位置差m、姿态差rad、各项布尔检查和启动连续通过时间s；只读getter供ROS包装读取。初始误差NaN；节点重建时清空 |
+| `hippo_fusion.cpp` / `updateReadiness()` | 输入有限EKF输出和原观测缓存，保持原READY判定，额外记录全部检查并选择第一项失败原因。首次初始化等待不再统一标作保持静止；初始化后的READY/DEGRADED/RECOVERING逻辑保留 |
+| 同上 / `updateFilter()` | 每个10ms重采样窗口推动原库，有限输出计入filter_update_count；未就绪也保留诊断。未匹配压力、上游尚无输出和非有限结果分别标记 |
+| 同上 / `pushImu()` | 记录相邻有效IMU源时间间隔，超过原imu_max_gap_s时保存首次故障时刻/间隔/原因，继续使用原锁定行为，不补缺失积分 |
+| 同上 / `setVision()`、`setPressure()` | 故障后直接返回false，不再修改观测、首次故障或拒收计数；避免与冻结IMU时钟产生次生时间错误 |
+| `fusion_node.cpp` / `publishDiagnostics()` | 每250ms读取快照，发布诊断版本2、实际误差/阈值、快照源时间及故障字段；角度由rad转换为deg展示。状态切换时打印数值摘要；初始化尚未通过时也可读取诊断 |
+| `test_hippo_fusion.cpp`、`test_fusion_ros.cpp` | 720ms延迟下初始化前可见诊断，独立注入位置/角度差，检查过期观测、连续通过时间、故障后输入不会覆盖首因；ROS验证实际诊断话题和故障后无新状态 |
+
+`filter_update_count`与ROS的`output_count`分离；故障后快照时间不前进，原始IMU接收诊断可以继续前进。`readiness_blocker`在锁定故障后保留上次检查原因，当前故障由顶层message/fault字段表示。对比当前融合与较早视觉的设计未在本批替换，误差包含延迟期间的运动，不将其标成同时间创新量或定位真值误差。部署、构造数据流例子与实际验证见README§13.18。

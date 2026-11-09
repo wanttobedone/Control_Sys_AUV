@@ -2,7 +2,7 @@
 
 自研 ROV 规划与控制学习工程。算法、节点、测试使用 C++；自有启动文件统一为 XML 内容、`.launch` 后缀。
 
-## 1. 系统目标与当前进度（2026-11-03）
+## 1. 系统目标与当前进度（2026-11-09）
 
 | 部分 | 当前状态 |
 |---|---|
@@ -12,8 +12,9 @@
 | 水平到点：规划、轨迹跟踪、姿态与物理分配 | 已实现并完成原 Hippo Gazebo 闭环；新入口与实测结果见 §10 |
 | 逐电机开环工具 MotorProbeNode | 已实现；软件接线验证与使用说明见 §11，尚未连接本项目真机 |
 | USTROV 真机手柄开环 | 10-27 用户报告 lab 经网线连接 Pi，运行 core + joystick 完成开环操作；本次源码核对与接入边界见 §14 |
-| 视觉基础 | 湿标定候选K/D及Pi单标签PnP已跑通；97帧记录见§13.13。0.3.0只读ROS接口已实现、23项软件测试通过；修复采集配置后用户确认RViz显示ID16并收到有效camera_pose，跨机视觉链已运行。测频含主动遮挡，持续可见帧率未单测。机体状态/视觉控制未接入，部署见§13.15 |
+| 视觉基础 | 湿标定候选K/D及Pi单标签PnP已跑通；97帧记录见§13.13。0.3.0只读ROS接口已实现、23项软件测试通过；修复采集配置后用户确认RViz显示ID16并收到有效camera_pose，跨机视觉链已运行。测频含主动遮挡，持续可见帧率未单测。机体融合进度见§13.17，视觉控制尚未接入；视觉部署见§13.15 |
 | MPC、真机闭环 | 尚未实现/验收；手柄开环不代表这些功能已完成 |
+| 机体视觉与IMU/压力融合 | 已实现并由用户在Pi/lab运行；11-09压力/倾斜对齐通过，放宽参数已确认生效但仍未READY/home，随后发生IMU缺口故障。已补充诊断v2和首次故障保留，14项融合测试通过，待lab部署取具体阻塞数值，详§13.18 |
 
 **现在可发布一个相对启动原点的 XY 坐标，驱动 Hippo 转向、跟踪并到点保持。直接从 §10 使用新入口。** 控制为纵向 PD/模型前馈、LOS 航向、姿态 PD；深度仅监测，MPC 尚未加入。当前使用 USTROV 真值反馈，不经过 PX4，不代表视觉/惯导融合已验收。§3–7 保留只读预览，§9 保留有限输入试验，它们是独立诊断入口。
 
@@ -1767,7 +1768,9 @@ ros2 launch rov_bringup hippo_fusion.launch \
   camera_file:="$HOME/vision_data/calibration_wet_01/results_03/camera_wet.xml"
 ~~~
 
-新入口复用原TagPoseNode，并增加融合节点/RViz。仍使用ID16，启动时让它完整可见，ROV保持静稳直到READY/home已建立。`startup_settle_s=3`只是最低等待；在5Hz合成观测测试中原库倾斜方差收敛和home建立约需25～31s，真实等待以诊断为准，未放宽其3°倾斜方差门槛。若已单独运行TagPoseNode，可加 `start_vision:=false` 只启动融合/RViz。
+新入口复用原TagPoseNode，并增加融合节点/RViz。仍使用ID16，启动时让它完整可见，允许手扶轻微漂动，尽量减少剧烈运动，直到READY/home已建立。`startup_settle_s=3`只是最低等待；在5Hz合成观测测试中原库倾斜方差收敛和home建立约需25～31s，真实等待以诊断为准，未放宽其3°倾斜方差门槛。若已单独运行TagPoseNode，可加 `start_vision:=false` 只启动融合/RViz。
+
+**2026-11-09手扶只读预览参数。** 用户现场图像源时间差约0.31～0.67s、视觉位姿约0.35～0.64s，日志已出现压力对齐、Tilt aligned和视觉融合启停。按用户要求，`config/hippo_fusion.yaml`现设置`history_s=0.8`、`vision_timeout_s=2.0`、`startup_position_tolerance_m=0.20`、`startup_angle_tolerance_rad=0.5235987756`（30°）；其余检查保留。`setVision()`仍只接纳历史窗口内的观测，`updateReadiness()`使用较宽的位置/姿态差及新鲜度容差，首次通过仍需持续0.5s。它比较当前融合状态与最新视觉状态，图像延迟期间的实际运动也会贡献差值；20cm/30°是预览就绪容差，不是测得误差。上游约7s无新视觉时的Stopping日志由库自己的超时触发，不受这两个位置/姿态容差直接控制。本批只修改运行YAML，无需编译；lab重启launch并显式传`fusion_config:="$HOME/Control_Sys_AUV/ROV_Control/src/rov_bringup/config/hippo_fusion.yaml"`即可读取，Pi采集/传感器入口保持运行。未把该配置作为真机闭环验收参数。
 
 首次视觉/压力源时间相近时，对齐压力高度零点：z=z0−(P−P0)/(rho·g)。因此直接在水里启动即可；这里z是飞控中心到标签平面的高度，不是距水面的深度。相机消息、IMU和压力的源时间均来自Pi；lab接收时间不用于IMU积分。
 
@@ -1802,7 +1805,53 @@ ros2 bag record -o "$HOME/vision_data/fusion/run_$(date +%Y%m%d_%H%M%S)" --topic
 
 **6. 当前边界和验证。** 完整函数设计见总体设计§13.14–13.15。单标签定位范围、粗测外参、飞控板中心近似IMU点和压力点高度变化一致，是当前原型假设。没有全标签地图、DVL、实机闭环或新的米制精度结论。上游不导出完整协方差，本批输出PoseStamped/TwistStamped，不填零伪造Odometry；上游完整姿态融合仍使用0.01四元数分量噪声，位置标准差参数不改变这项权重。
 
-WSL Ubuntu24.04/Jazzy：新增12项GTest（3项几何、8项真实EKF库、1项ROS端到端）和原23项视觉/标定测试全部通过，共35项。覆盖非零/倾斜姿态、用户一帧对应的解析场景、q/-q交替、5Hz视觉延迟、200/250Hz IMU、平移/升沉、遮挡转向、异常时间、home重设及IMU断流不补状态；不是硬件传感器精度测试。三个自研包和两个上游依赖构建通过；两个新XML参数解析、YAML/RViz解析、含视觉节点的无界面总launch实际启动和SIGINT正常退出通过；Pi只构建bringup的包选择在WSL复现通过，不称ARM编译。真实Pi/lab融合和RViz窗口尚待用户运行。首次12s初始化试验未通过，原库倾斜方差还未收敛；保留原门槛，延长观察后5Hz的两个场景首次READY为26.00/30.97s，ROS例home约25.01s。正式C++测试保留；临时合成内参/启动夹具已清理，build/install/log由Git忽略。
+11-03软件验证（WSL Ubuntu24.04/Jazzy）：新增12项GTest（3项几何、8项真实EKF库、1项ROS端到端）和原23项视觉/标定测试全部通过，共35项。覆盖非零/倾斜姿态、用户一帧对应的解析场景、q/-q交替、5Hz视觉延迟、200/250Hz IMU、平移/升沉、遮挡转向、异常时间、home重设及IMU断流不补状态；不是硬件传感器精度测试。三个自研包和两个上游依赖构建通过；两个新XML参数解析、YAML/RViz解析、含视觉节点的无界面总launch实际启动和SIGINT正常退出通过；Pi只构建bringup的包选择在WSL复现通过，不称ARM编译。11-03交付时真实融合待运行；11-09已收到Pi/lab运行日志，压力/倾斜对齐通过，新预览参数已由运行节点参数确认生效但仍未READY/home；后续诊断修正见§13.18。首次12s初始化试验未通过，原库倾斜方差还未收敛；保留原门槛，延长观察后5Hz的两个场景首次READY为26.00/30.97s，ROS例home约25.01s。正式C++测试保留；临时合成内参/启动夹具已清理，build/install/log由Git忽略。
+
+### 13.18 未就绪原因与首次故障诊断（2026-11-09）
+
+用户已确认放宽参数确实加载，但视觉融合启动后约6分45秒仍未READY；随后出现IMU_RECEIVE_STALE和FAULT_IMU_GAP_RESTART_NODE。这是两个先后发生的问题。此前诊断把所有初始化未通过原因统一写成“保持静止”，且未展示实际位置/角度差，无法据旧记录定位前一个问题。后一个问题触发后，内部IMU时间冻结、外层仍接收新IMU；原压力回调继续对冻结时间检查，产生大量次生拒收。因此当前IMU接收年龄很小与锁定故障可以同时存在。
+
+本批沿用原EKF、时间窗口和READY判定，只修正诊断与故障后的输入处理。启动日志带“诊断v2”；输出字段`diagnostics_version=2`可确认运行的是新程序。
+
+| 字段/状态 | 如何解释 |
+|---|---|
+| `filter_update_count` / `output_count` | 前者是得到有限EKF输出的计算次数，后者是ROS状态发布次数。前者增长而后者为0，说明计算在进行但首次就绪尚未通过 |
+| `readiness_blocker` | 第一项未通过的条件；每项的布尔值也同时发布，多个失败可同时存在 |
+| `WAIT_FRESH_VISION` / `WAIT_FRESH_PRESSURE` | 参与本次检查的观测年龄超限或时间超前；检查`vision_age_s`/`pressure_age_s`和对应timeout |
+| `WAIT_TILT_ALIGNMENT` | 上游倾斜估计尚未有效；不是位置差或姿态差超限 |
+| `WAIT_POSITION_AGREEMENT` | 当前融合位置与最新视觉位置的三维距离超过`position_tolerance_m`；查看`position_error_m` |
+| `WAIT_ANGLE_AGREEMENT` | 两个完整姿态之间的最短旋转角超过`angle_tolerance_deg`；查看`angle_error_deg` |
+| `WAIT_STARTUP_SETTLE` / `WAIT_CONSISTENCY_HOLD` | 最低启动等待尚未结束/各项需连续通过0.5s；查看`startup_elapsed_s`与`startup_consistent_s` |
+| `gate_check_stamp_ns`、`gate_vision_stamp_ns`、`gate_pressure_stamp_ns` | 同一次检查涉及的源时间。故障或断流后保持最后快照；不能把定时发布的新header当成滤波继续运行 |
+| `fault_reason`、`fault_stamp_ns`、`fault_imu_gap_s` | 首次锁定故障、触发时源时间和实际IMU间隔。新观测不再覆盖它，也不再制造压力/视觉时间拒收 |
+
+位置/角度差仍比较当前输出和较早的视觉观测，并非同一时刻的EKF创新量。图像延迟期间的真实运动会贡献差值。本批把它显示出来，尚未替换该判据。没有计算过的误差为NaN；初始化完成后`startup_consistent_s`保留首次通过时的值。故障不自动恢复，重启融合才重新初始化和建立home。
+
+**部署到lab。** 先将本批源码同步到`~/Control_Sys_AUV`。如使用Git，需要先在本地提交/推送本批文件，再在lab拉取；仅本地修改不会自动出现在远端。停止lab旧融合launch，然后在lab构建这一个包：
+
+~~~bash
+cd ~/Control_Sys_AUV/ROV_Control
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+MAKEFLAGS=-j2 CMAKE_BUILD_PARALLEL_LEVEL=2 colcon build \
+  --base-paths src/rov_state_estimation \
+  --executor sequential --symlink-install \
+  --cmake-args -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
+source install/local_setup.bash
+ros2 launch rov_bringup hippo_fusion.launch \
+  vehicle_name:=uuv00 \
+  camera_file:="$HOME/vision_data/calibration_wet_01/results_03/camera_wet.xml" \
+  fusion_config:="$HOME/Control_Sys_AUV/ROV_Control/src/rov_bringup/config/hippo_fusion.yaml"
+~~~
+
+`install/setup.bash`加载此前已成功部署的依赖环境；`--base-paths`只发现本批融合包；两个并行变量限制编译资源；本机保留正式测试，lab部署用`BUILD_TESTING=OFF`不额外编译测试；最后source让当前终端使用新安装。Pi采集和传感器桥不需要更新本批代码。
+
+另开lab终端执行`ros2 topic echo /uuv00/state/diagnostics --once`。先确认版本为2，再查看blocker、实际误差、年龄及计数；发生故障时查看fault三项。若需要判断计数是否增长，再取一帧。无需为了这一步重新录制标定或静止CSV。
+
+**数据流例子（构造示例，不是现场测量）：** 当前融合位置(0.1,0.2,0.35)m，最新视觉位置(0.5,0.2,0.35)m，位置差0.40m大于0.20m。`updateReadiness()`保留未就绪状态并记录`WAIT_POSITION_AGREEMENT`，`publishDiagnostics()`将0.40m、0.20m及两者源时间发出，状态发布计数仍为0。若随后IMU源时间跳过0.21s，`pushImu()`记录该间隔并锁定故障，后续压力/视觉直接不接纳；诊断保留首次故障与故障前最后检查快照。
+
+**本批验证。** 本机WSL Ubuntu24.04/Jazzy中融合包构建通过，13项几何/融合单元测试和1项ROS集成测试全部通过。包含720ms视觉延迟、初始化前误差可读、40cm/1rad分别触发位置/姿态阻塞、0.5s连续通过、观测过期、200ms/210ms源时间缺口、故障后继续发送压力/视觉仍保留首因及停止状态发布。复用既有构建目录，没有新增临时测试源码；日志和构建结果位于忽略目录，正式C++测试保留。尚未在lab设备运行诊断v2，不能据合成测试宣称现场READY问题已解决。
+
 ## 14. 当前 USTROV 手柄开环与 ROV_Control 接入边界（2026-10-27）
 
 **证据范围。** 用户报告平台已搭建，Linux 操作站 lab 经网线连接 Pi，运行以下 USTROV 入口实施手柄开环。本次读取本地子模块 HEAD `f22f647`；相对历史验收的 `b1208e5`，主要新增有线 DDS 部署、只读 OLED 和手柄四轴增益 51.42，core/bridge/mixer 主逻辑未变。本次没有远程读取两台设备的实际安装版本、重跑控制或修改参数；用户报告不能替代逐项标定记录。旧 §11.13–11.18 是 10-12 的历史检查，不再作为“平台至今未能开环”的判断。

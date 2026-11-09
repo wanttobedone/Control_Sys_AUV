@@ -6,6 +6,7 @@
 #include "rov_state_estimation/frame_adapter.h"
 
 #include <deque>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -41,6 +42,36 @@ struct FusionOutput
   bool ready{false};
 };
 
+// 最近一次就绪检查的只读快照。检查由 IMU 推进，ROS 定时器只负责读取。
+// check_stamp_ns 是该次计算的源时间；故障或 IMU 断流后快照不会冒充新计算。
+// 尚未得到滤波输出的数值使用 NaN，而不是用 0 表示“误差为零”。
+struct FusionDiagnostics
+{
+  int64_t check_stamp_ns{0};
+  int64_t vision_stamp_ns{0};
+  int64_t pressure_stamp_ns{0};
+  uint64_t filter_update_count{0};
+  double vision_age_s{std::numeric_limits<double>::quiet_NaN()};
+  double pressure_age_s{std::numeric_limits<double>::quiet_NaN()};
+  double position_error_m{std::numeric_limits<double>::quiet_NaN()};
+  double angle_error_rad{std::numeric_limits<double>::quiet_NaN()};
+  double startup_elapsed_s{0.0};
+  // 首次初始化所用的连续通过时长；初始化完成后保留该值。
+  double startup_consistent_s{0.0};
+  bool attitude_valid{false};
+  bool vision_fresh{false};
+  bool pressure_fresh{false};
+  bool position_consistent{false};
+  bool angle_consistent{false};
+  std::string readiness_blocker{"WAIT_FILTER_OUTPUT"};
+
+  // 源时间间隔不等于 ROS 接收间隔。fault_* 只记录首次锁定故障，直到节点重建。
+  double last_imu_dt_s{std::numeric_limits<double>::quiet_NaN()};
+  double fault_imu_gap_s{std::numeric_limits<double>::quiet_NaN()};
+  int64_t fault_stamp_ns{0};
+  std::string fault_reason;
+};
+
 // 复用 Ekf 计算库的适配器，不继承/复制上游 EKF，不修改其状态方程。
 // 调用者串行调用 setVision/setPressure/pushImu；只有 pushImu 推进滤波。
 // 时间全部来自同一 Pi 时钟下的消息 header，主机接收时刻不参与积分 dt。
@@ -60,6 +91,7 @@ public:
   int64_t pressureStamp() const;
   uint64_t rejectedInputs() const;
   double tiltVarianceRad2() const;
+  const FusionDiagnostics &diagnostics() const;
 
 private:
   struct VisionInput
@@ -80,6 +112,7 @@ private:
   bool updateReadiness(const FusionOutput &output);
 
   FusionConfig config_;
+  FusionDiagnostics diagnostics_;
   std::unique_ptr<Ekf> ekf_;
   std::deque<PressureInput> pressures_;
   std::optional<VisionInput> vision_;

@@ -48,6 +48,11 @@ bool HippoFusion::reject(const std::string &reason)
 
 bool HippoFusion::setVision(int64_t stamp_ns, const RigidPose &body_WB)
 {
+  // 故障时内部 IMU 时间已经停止。新观测不再与冻结时钟比较，也不覆盖首次故障。
+  if (faulted_)
+  {
+    return false;
+  }
   if (stamp_ns <= 0 || !FrameAdapter::isValid(body_WB))
   {
     return reject("vision_invalid_pose_or_stamp");
@@ -72,6 +77,11 @@ bool HippoFusion::setVision(int64_t stamp_ns, const RigidPose &body_WB)
 
 bool HippoFusion::setPressure(int64_t stamp_ns, double pressure_pa)
 {
+  // 与 setVision 相同：锁定故障后停止接纳，不制造 pressure_clock 等连锁报错。
+  if (faulted_)
+  {
+    return false;
+  }
   if (stamp_ns <= last_pressure_ns_ || !std::isfinite(pressure_pa) || pressure_pa <= 0.0)
   {
     return reject("pressure_invalid_or_stamp_not_increasing");
@@ -198,11 +208,15 @@ std::optional<FusionOutput> HippoFusion::pushImu(int64_t stamp_ns,
   }
   int64_t cursor_ns = last_imu_ns_;
   const double dt_s = static_cast<double>(stamp_ns - cursor_ns) * 1e-9;
+  diagnostics_.last_imu_dt_s = dt_s;
   last_imu_ns_ = stamp_ns;
   if (dt_s > config_.imu_max_gap_s)
   {
     faulted_ = true;
     status_ = "FAULT_IMU_GAP_RESTART_NODE";
+    diagnostics_.fault_stamp_ns = stamp_ns;
+    diagnostics_.fault_imu_gap_s = dt_s;
+    diagnostics_.fault_reason = "imu_gap_no_invented_integration";
     reject("imu_gap_no_invented_integration");
     return std::nullopt;
   }
@@ -255,11 +269,13 @@ std::optional<FusionOutput> HippoFusion::updateFilter(int64_t stamp_ns,
   if (!pressure_aligned_)
   {
     status_ = "WAIT_TIME_MATCHED_VISION_PRESSURE";
+    diagnostics_.readiness_blocker = status_;
     return std::nullopt;
   }
   if (!ekf_->Update())
   {
-    status_ = "ALIGNING_EKF_KEEP_ROV_STILL";
+    status_ = "WAIT_EKF_UPDATE";
+    diagnostics_.readiness_blocker = status_;
     return std::nullopt;
   }
   if (first_update_ns_ == 0)
@@ -276,6 +292,9 @@ std::optional<FusionOutput> HippoFusion::updateFilter(int64_t stamp_ns,
   {
     faulted_ = true;
     status_ = "FAULT_NONFINITE_EKF_RESTART_NODE";
+    diagnostics_.fault_stamp_ns = stamp_ns;
+    diagnostics_.fault_reason = "nonfinite_ekf_output";
+    reject(diagnostics_.fault_reason);
     return std::nullopt;
   }
   output.ready = updateReadiness(output);
@@ -285,22 +304,40 @@ std::optional<FusionOutput> HippoFusion::updateFilter(int64_t stamp_ns,
 bool HippoFusion::updateReadiness(const FusionOutput &output)
 {
   tilt_variance_rad2_ = ekf_->CalcRotationVectorVariances().head<2>().sum();
-  const double vision_age_s =
-      vision_ ? static_cast<double>(output.stamp_ns - vision_->stamp_ns) * 1e-9 : 1e9;
-  const double pressure_age_s = static_cast<double>(output.stamp_ns - last_pressure_ns_) * 1e-9;
-  const bool fresh = vision_age_s >= 0.0 && vision_age_s < config_.vision_timeout_s &&
-                     pressure_age_s >= 0.0 && pressure_age_s < config_.pressure_timeout_s;
-  bool consistent = false;
-  if (fresh && ekf_->AttitudeValid() && vision_)
+  // 所有 gate_* 数据取自同一次检查。外层原始回调可能随后收到更新的消息，
+  // 因此同时保存参与检查的视觉/压力时间，避免把两个不同时刻的数值混在一起解释。
+  diagnostics_.check_stamp_ns = output.stamp_ns;
+  diagnostics_.vision_stamp_ns = vision_ ? vision_->stamp_ns : 0;
+  diagnostics_.pressure_stamp_ns = last_pressure_ns_;
+  ++diagnostics_.filter_update_count;
+  diagnostics_.vision_age_s = vision_ ? static_cast<double>(output.stamp_ns - vision_->stamp_ns) * 1e-9
+                                    : std::numeric_limits<double>::quiet_NaN();
+  diagnostics_.pressure_age_s = static_cast<double>(output.stamp_ns - last_pressure_ns_) * 1e-9;
+  diagnostics_.vision_fresh = diagnostics_.vision_age_s >= 0.0 &&
+                              diagnostics_.vision_age_s < config_.vision_timeout_s;
+  diagnostics_.pressure_fresh = diagnostics_.pressure_age_s >= 0.0 &&
+                                diagnostics_.pressure_age_s < config_.pressure_timeout_s;
+  diagnostics_.attitude_valid = ekf_->AttitudeValid();
+  diagnostics_.position_error_m = std::numeric_limits<double>::quiet_NaN();
+  diagnostics_.angle_error_rad = std::numeric_limits<double>::quiet_NaN();
+  if (vision_)
   {
-    const double position_error_m = (output.body_WB.p_m - vision_->body_WB.p_m).norm();
-    const double angle_error_rad = output.body_WB.q.angularDistance(vision_->body_WB.q);
-    consistent = position_error_m < config_.startup_position_tolerance_m &&
-                 angle_error_rad < config_.startup_angle_tolerance_rad;
+    // 保留原比较：当前输出 vs 最新视觉，不是同一时刻的创新量。
+    // 即使视觉已过期也展示差值；是否允许 READY 仍由 fresh 单独判断。
+    diagnostics_.position_error_m = (output.body_WB.p_m - vision_->body_WB.p_m).norm();
+    diagnostics_.angle_error_rad = output.body_WB.q.angularDistance(vision_->body_WB.q);
   }
+  diagnostics_.position_consistent =
+      diagnostics_.position_error_m < config_.startup_position_tolerance_m;
+  diagnostics_.angle_consistent =
+      diagnostics_.angle_error_rad < config_.startup_angle_tolerance_rad;
+  diagnostics_.startup_elapsed_s = static_cast<double>(output.stamp_ns - first_update_ns_) * 1e-9;
+  const bool fresh = diagnostics_.vision_fresh && diagnostics_.pressure_fresh;
+  bool consistent = fresh && diagnostics_.attitude_valid && diagnostics_.position_consistent &&
+                    diagnostics_.angle_consistent;
   if (!initialized_)
   {
-    if (static_cast<double>(output.stamp_ns - first_update_ns_) * 1e-9 < config_.startup_settle_s)
+    if (diagnostics_.startup_elapsed_s < config_.startup_settle_s)
     {
       consistent = false;
     }
@@ -316,10 +353,48 @@ bool HippoFusion::updateReadiness(const FusionOutput &output)
     {
       initialized_ = true;
     }
+    diagnostics_.startup_consistent_s =
+        consistent_since_ns_ == 0 ? 0.0
+                                 : static_cast<double>(output.stamp_ns - consistent_since_ns_) * 1e-9;
+  }
+
+  // 多项同时不满足时，blocker 给出按以下顺序遇到的第一项；布尔量仍展示所有检查。
+  // 不再把视觉时效、位置差或角度差都归为“保持静止”。不改变上面的原就绪判定。
+  if (!diagnostics_.vision_fresh)
+  {
+    diagnostics_.readiness_blocker = "WAIT_FRESH_VISION";
+  }
+  else if (!diagnostics_.pressure_fresh)
+  {
+    diagnostics_.readiness_blocker = "WAIT_FRESH_PRESSURE";
+  }
+  else if (!diagnostics_.attitude_valid)
+  {
+    diagnostics_.readiness_blocker = "WAIT_TILT_ALIGNMENT";
+  }
+  else if (!diagnostics_.position_consistent)
+  {
+    diagnostics_.readiness_blocker = "WAIT_POSITION_AGREEMENT";
+  }
+  else if (!diagnostics_.angle_consistent)
+  {
+    diagnostics_.readiness_blocker = "WAIT_ANGLE_AGREEMENT";
+  }
+  else if (diagnostics_.startup_elapsed_s < config_.startup_settle_s)
+  {
+    diagnostics_.readiness_blocker = "WAIT_STARTUP_SETTLE";
+  }
+  else if (!initialized_)
+  {
+    diagnostics_.readiness_blocker = "WAIT_CONSISTENCY_HOLD";
+  }
+  else
+  {
+    diagnostics_.readiness_blocker = "NONE";
   }
   if (!initialized_)
   {
-    status_ = "ALIGNING_EKF_KEEP_ROV_STILL";
+    status_ = diagnostics_.readiness_blocker;
     return false;
   }
   // 丢标后重新收到观测，不等于滞后的EKF已经纠正漂移；比较通过才恢复 READY。
@@ -359,6 +434,10 @@ uint64_t HippoFusion::rejectedInputs() const
 double HippoFusion::tiltVarianceRad2() const
 {
   return tilt_variance_rad2_;
+}
+const FusionDiagnostics &HippoFusion::diagnostics() const
+{
+  return diagnostics_;
 }
 
 } // namespace rov_state_estimation
